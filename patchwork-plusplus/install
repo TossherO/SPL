@@ -1,0 +1,8 @@
+# To install Eigen
+sudo apt-get install libeigen3-dev
+
+# To install Patchwork++
+cd patchwork-plusplus
+mkdir build && cd build
+cmake ..
+make
