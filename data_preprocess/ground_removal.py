@@ -11,10 +11,10 @@ def ground_removal(lidar_batch, scene_save_dir):
     for item in lidar_batch:
         lidar_path = item['lidar_path']
         lidar2global = item['lidar2global']
-        points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :4]  # Load points without intensity
+        points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :4]
         R = lidar2global[:3, :3]
         T = lidar2global[:3, 3]
-        points[:, :3] = (R @ points[:, :3].T).T + T  # Transform points to global coordinates
+        points[:, :3] = (R @ points[:, :3].T).T + T
         points_c.append(points)
         num_points.append(points.shape[0])
 
@@ -69,7 +69,7 @@ if __name__ == '__main__':
 
         lidar_with_sweeps = []
         for sample in scene['samples']:
-            for i, sweep in enumerate(sample['lidar_sweep']):
+            for sweep in sample['lidar_sweep']:
                 lidar_with_sweeps.append({
                     'lidar_path': sweep['lidar_path'],
                     'lidar2global': sweep['ego2global'] @ sample['lidar2ego'],
