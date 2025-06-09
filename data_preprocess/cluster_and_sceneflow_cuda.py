@@ -14,79 +14,104 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 def fit_bounding_box(cluster_points):
     """
-    Fit BEV bounding box around cluster points.
+    CUDA并行优化的L-shape框拟合算法（修正版）
     
     Args:
-        cluster_reference (torch.Tensor) : LiDAR point cloud of cluster expressed in reference frame with shape (N,4).
+        cluster_points (torch.Tensor): 点云数据 (N, 4)
     
     Returns:
-        T_reference_bbox (torch.Tensor) : Homogeneous transformation matrix for mapping 3D points from bbox frame to reference frame.
-        bboxdimensions (list) : List with bounding box dimensions [length, width, and height].
+        T_reference_bbox (torch.Tensor): 4x4变换矩阵
+        bboxdimensions (list): [长度, 宽度, 高度]
     """
-    # Map points to local frame using a rotation around reference z-axis and select rotation based on closeness metric beta.
+    device = cluster_points.device
+    
+    # 1. 并行角度搜索
     delta = 1
-    d0 = torch.tensor(1e-2)
-    max_beta = -float('inf')
-    choose_angle = None
-    for angle in torch.arange(0, 90 + delta, delta):
-        angle = np.pi / 180 * angle
-        R_local_reference = torch.tensor([[ torch.cos(angle), torch.sin(angle)],
-                                          [-torch.sin(angle), torch.cos(angle)]]).cuda()
-        cluster_local = (R_local_reference @ cluster_points[:, :2].T).T
-        min_x, max_x = cluster_local[:, 0].min(), cluster_local[:, 0].max()
-        min_y, max_y = cluster_local[:, 1].min(), cluster_local[:, 1].max()
-        Dx = torch.vstack((cluster_local[:, 0] - min_x, max_x - cluster_local[:, 0])).min(dim=0).values
-        Dy = torch.vstack((cluster_local[:, 1] - min_y, max_y - cluster_local[:, 1])).min(dim=0).values
-        beta = torch.vstack((Dx, Dy)).min(dim=0).values
-        beta = torch.maximum(beta, d0)
-        beta = 1 / beta
-        beta = beta.sum()
-        if beta > max_beta:
-            max_beta = beta
-            choose_angle = angle
-            
-    # Get minimum and maximum x and y values in local frame.
-    angle = choose_angle
-    R_local_reference = torch.tensor([[ torch.cos(angle), torch.sin(angle)],
-                                      [-torch.sin(angle), torch.cos(angle)]]).cuda()
-    cluster_local = (R_local_reference @ cluster_points[:,:2].T).T
-    min_x, max_x = cluster_local[:,0].min(), cluster_local[:,0].max()
-    min_y, max_y = cluster_local[:,1].min(), cluster_local[:,1].max()
+    angles_deg = torch.arange(0, 91, delta, device=device)  # 0-90度
+    angles_rad = torch.deg2rad(angles_deg)
     
-    # X-axis is aligned with longest 2D dimension.
-    if (max_x - min_x) < (max_y - min_y):
-        angle = choose_angle + np.pi / 2
-        R_local_reference = torch.tensor([[ torch.cos(angle), torch.sin(angle)],
-                                          [-torch.sin(angle), torch.cos(angle)]]).cuda()
-        cluster_local = (R_local_reference @ cluster_points[:,:2].T).T
-        min_x, max_x = cluster_local[:,0].min(), cluster_local[:,0].max()
-        min_y, max_y = cluster_local[:,1].min(), cluster_local[:,1].max()
-
-    # Calculate corners of 2D bounding box.
-    corners_local = torch.tensor([[max_x, min_y],
-                                  [min_x, min_y],
-                                  [min_x, max_y],
-                                  [max_x, max_y]]).cuda()
-    corners_reference = (R_local_reference.T @ corners_local.T).T
+    # 批量生成旋转矩阵 [91, 2, 2]
+    cos_a = torch.cos(angles_rad)
+    sin_a = torch.sin(angles_rad)
+    R_matrices = torch.stack([
+        torch.stack([cos_a, sin_a], dim=1),
+        torch.stack([-sin_a, cos_a], dim=1)
+    ], dim=1)
     
-    # Calculate bounding box center (bottom).
-    bboxcenter_reference = torch.zeros([3])
-    bboxcenter_reference[0] = corners_reference[:, 0].sum() / 4
-    bboxcenter_reference[1] = corners_reference[:, 1].sum() / 4
-    bboxcenter_reference[2] = cluster_points[:, 2].min()
-
-    # Calculate T_reference_cluster.
-    T_reference_bbox = torch.eye(4).cuda()
-    T_reference_bbox[:3, 3] = bboxcenter_reference
-    T_reference_bbox[:2, :2] = R_local_reference.T
-
-    # Calculate bounding box dimensions.
-    bboxlength     = torch.linalg.norm(corners_reference[1]-corners_reference[0])
-    bboxwidth      = torch.linalg.norm(corners_reference[-1]-corners_reference[0])
-    bboxheight     = cluster_points[:, 2].max()-cluster_points[:, 2].min()
-    bboxdimensions = [bboxlength.item(), bboxwidth.item(), bboxheight.item()]
+    # 点云数据准备 [N, 2] -> [1, N, 2]
+    xy_points = cluster_points[:, :2].unsqueeze(0)
     
-    return T_reference_bbox, bboxdimensions
+    # 批量旋转点云 [91, N, 2]
+    rotated_points = torch.matmul(R_matrices, xy_points.transpose(1, 2)).transpose(1, 2)
+    
+    # 并行计算紧凑性指标
+    min_x = rotated_points[:, :, 0].min(dim=1).values
+    max_x = rotated_points[:, :, 0].max(dim=1).values
+    min_y = rotated_points[:, :, 1].min(dim=1).values
+    max_y = rotated_points[:, :, 1].max(dim=1).values
+    
+    # 计算点到边界的距离
+    Dx = torch.min(rotated_points[:, :, 0] - min_x.unsqueeze(1), max_x.unsqueeze(1) - rotated_points[:, :, 0])
+    Dy = torch.min(rotated_points[:, :, 1] - min_y.unsqueeze(1), max_y.unsqueeze(1) - rotated_points[:, :, 1])
+    
+    # 计算紧凑性指标beta [91]
+    d0 = torch.tensor(1e-2, device=device)
+    beta = torch.min(Dx, Dy).clamp(min=d0)
+    beta = (1 / beta).sum(dim=1)
+    
+    # 选择最佳角度
+    best_idx = torch.argmax(beta)
+    choose_angle = angles_rad[best_idx]
+    
+    # 2. 提取最优角度对应的边界值（关键修正）
+    min_x_val = min_x[best_idx]
+    max_x_val = max_x[best_idx]
+    min_y_val = min_y[best_idx]
+    max_y_val = max_y[best_idx]
+    range_x = max_x_val - min_x_val
+    range_y = max_y_val - min_y_val
+    
+    # 3. 方向校正（确保长边对齐）
+    if range_x < range_y:
+        choose_angle += np.pi / 2
+        R_best = torch.tensor([
+            [torch.cos(choose_angle), torch.sin(choose_angle)],
+            [-torch.sin(choose_angle), torch.cos(choose_angle)]
+        ], device=device)
+        rotated_best = (R_best @ cluster_points[:, :2].T).T
+        min_x_val = rotated_best[:, 0].min()
+        max_x_val = rotated_best[:, 0].max()
+        min_y_val = rotated_best[:, 1].min()
+        max_y_val = rotated_best[:, 1].max()
+    else:
+        R_best = R_matrices[best_idx]
+    
+    # 4. 边界框构造
+    corners_local = torch.tensor([
+        [max_x_val, min_y_val],
+        [min_x_val, min_y_val],
+        [min_x_val, max_y_val],
+        [max_x_val, max_y_val]
+    ], device=device)
+    
+    corners_ref = (R_best.T @ corners_local.T).T
+    
+    # 5. 中心点和变换矩阵
+    bbox_center_ref = torch.zeros(3, device=device)
+    bbox_center_ref[0] = corners_ref[:, 0].mean()
+    bbox_center_ref[1] = corners_ref[:, 1].mean()
+    bbox_center_ref[2] = cluster_points[:, 2].min()
+    
+    T_matrix = torch.eye(4, device=device)
+    T_matrix[:3, 3] = bbox_center_ref
+    T_matrix[:2, :2] = R_best.T
+    
+    # 6. 尺寸计算
+    length = torch.norm(corners_ref[1] - corners_ref[0])
+    width = torch.norm(corners_ref[3] - corners_ref[0])
+    height = cluster_points[:, 2].max() - cluster_points[:, 2].min()
+    
+    return T_matrix, [length.item(), width.item(), height.item()]
 
 
 def get_histogram_based_and_icp_based_transformations(source_points:torch.Tensor, target_points:torch.Tensor, search_size:float, search_step:float, max_icp_iterations:int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -189,8 +214,8 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
     time2 = time.time()
     # Perform clustering using HDBSCAN
     hdbscan_clusterer = hdbscan.HDBSCAN(min_cluster_size=args.cluster_min_size, cluster_selection_epsilon=args.cluster_selection_epsilon)
-    points_for_clustering = points_c.copy()
-    points_for_clustering[:, 3] = points_for_clustering[:, 3] / 10
+    points_for_clustering = points_c[:, :3].copy()
+    # points_for_clustering[:, 3] = points_for_clustering[:, 3] / 10
     cluster_labels = hdbscan_clusterer.fit_predict(points_for_clustering)
     
     time3 = time.time()
