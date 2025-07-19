@@ -7,7 +7,7 @@ import pickle
 
 def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--version', type=str, default='v1.0-trainval-1-5', help='NuScenes dataset version')
+    parser.add_argument('--version', type=str, default='v1.0-trainval-select', help='NuScenes dataset version')
     parser.add_argument('--data_root', type=str, default='./data/nuscenes', help='Path to the NuScenes dataset root directory')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--save_path', type=str, default='./data/nuscenes/nuscenes_data_info.pkl', help='Path to save the generated data info')
@@ -50,10 +50,11 @@ if __name__ == '__main__':
                     cam_global2ego[:3, :3] = Quaternion(cam_pose['rotation']).rotation_matrix.T
                     cam_global2ego[:3, 3] = -(cam_global2ego[:3, :3] @ np.array(cam_pose['translation']))
                     ego2cam = np.eye(4)
-                    ego2cam[:3, :3] = Quaternion(cam_pose['rotation']).rotation_matrix.T
-                    ego2cam[:3, 3] = -(ego2cam[:3, :3] @ np.array(cam_pose['translation']))
+                    ego2cam[:3, :3] = Quaternion(calib['rotation']).rotation_matrix.T
+                    ego2cam[:3, 3] = -(ego2cam[:3, :3] @ np.array(calib['translation']))
                     lidar2cam = ego2cam @ cam_global2ego @ ego2global @ lidar2ego
                     cams[cam_name] = {
+                        'token': cam['token'],
                         'img_path': img_path,
                         'timestamp': cam['timestamp'] / 1e6,
                         'cam2img': np.array(calib['camera_intrinsic']),
@@ -73,6 +74,7 @@ if __name__ == '__main__':
                 sweep_ego2global[:3, :3] = Quaternion(sweep_pose['rotation']).rotation_matrix
                 sweep_ego2global[:3, 3] = sweep_pose['translation']
                 lidar_sweep.append({
+                    'token': sweep['token'],
                     'timestamp': sweep_timestamp,
                     'lidar_path': sweep_lidar_path,
                     'ego2global': sweep_ego2global
@@ -95,6 +97,7 @@ if __name__ == '__main__':
                 })
 
             scene_samples.append({
+                'token': sample['token'],
                 'timestamp': timestamp,
                 'lidar_path': lidar_path,
                 'lidar2ego': lidar2ego,

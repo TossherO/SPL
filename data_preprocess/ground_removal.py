@@ -9,8 +9,8 @@ def ground_removal(lidar_with_sweeps, sample_idx, scene_save_dir):
     points_c = []
     num_points = []
     start = max(0, sample_idx - (args.frame_len - 1) // 2)
-    end = min(len(lidar_with_sweeps), sample_idx + (args.frame_len + 1) // 2)
-    for i in range(start, end):
+    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len + 1) // 2)
+    for i in range(start, end + 1):
         lidar_path = lidar_with_sweeps[i]['lidar_path']
         lidar2global = lidar_with_sweeps[i]['lidar2global']
         points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :4]
@@ -29,7 +29,7 @@ def ground_removal(lidar_with_sweeps, sample_idx, scene_save_dir):
 
     params = pypatchworkpp.Parameters()
     params.verbose = False
-    params.enable_RNR = False
+    params.enable_RNR = True
     params.sensor_height = 1.723
     params.min_range = 1.0
     params.max_range = 64
@@ -41,7 +41,7 @@ def ground_removal(lidar_with_sweeps, sample_idx, scene_save_dir):
     # nonground_idx = PatchworkPLUSPLUS.getNongroundIndices()
 
     idx = 0
-    for i in range(start, end):
+    for i in range(start, end + 1):
         num = num_points[i - start]
         is_ground = np.zeros(num, dtype=bool)
         _ground_idx = ground_idx[(ground_idx >= idx) & (ground_idx < idx + num)] - idx

@@ -184,8 +184,8 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
     points_c = []
     ground_points_c = []
     start = max(0, sample_idx - (args.frame_len - 1) // 2)
-    end = min(len(lidar_with_sweeps), sample_idx + (args.frame_len + 1) // 2)
-    for i in range(start, end):
+    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len + 1) // 2)
+    for i in range(start, end + 1):
         lidar_path = lidar_with_sweeps[i]['lidar_path']
         lidar2global = lidar_with_sweeps[i]['lidar2global']
         points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :3]
@@ -242,7 +242,7 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
                                           (abs(ground_points_r[:, 1] - y) < w / 2)]
         height_above_ground = 0
         if ground_points_r.shape[0] > 10:
-            height_above_ground = ground_points_r[:, 2].mean()
+            height_above_ground = ground_points_r[:, 2].mean().item()
             z = z - height_above_ground
             h = h + height_above_ground
 
@@ -267,13 +267,15 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
         cluster_point_indices = cluster_result['cluster_point_indices']
         cluster_points = points_c[cluster_point_indices]
         sample_points = cluster_result['points']
+        z = cluster_result['bbox_3d'][2]
+        sample_points = sample_points[sample_points[:, 2] > z + 0.1] 
         if sample_points.shape[0] < args.sceneflow_min_size:
             cluster_result['state'] = 'invalid'
             continue
 
         # Select the first and last frame indices for the sceneflow estimation
         first_idx = last_idx = None
-        for i in range(start, sample_idx):
+        for i in range(start, sample_idx + 1):
             _first_points = first_points = cluster_points[cluster_points[:, 3] == i]
             if first_points.shape[0] > args.sceneflow_min_size:
                 first_idx = i
@@ -281,7 +283,7 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
                     torch.manual_seed(0)
                     _first_points = first_points[torch.randperm(first_points.shape[0])[:args.sceneflow_max_size]]
                 break
-        for i in range(end - 1, sample_idx, -1):
+        for i in range(end, sample_idx - 1, -1):
             _last_points = last_points = cluster_points[cluster_points[:, 3] == i]
             if last_points.shape[0] > args.sceneflow_min_size:
                 last_idx = i
@@ -289,7 +291,7 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
                     torch.manual_seed(0)
                     _last_points = last_points[torch.randperm(last_points.shape[0])[:args.sceneflow_max_size]]
                 break
-        if first_idx is None or last_idx is None:
+        if first_idx is None or last_idx is None or first_idx == last_idx:
             cluster_result['state'] = 'invalid'
             continue
 
@@ -357,7 +359,7 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
                                             (abs(ground_points_r[:, 1] - y) < w / 2)]
             height_above_ground = 0
             if ground_points_r.shape[0] > 10:
-                height_above_ground = ground_points_r[:, 2].mean()
+                height_above_ground = ground_points_r[:, 2].mean().item()
                 z = z - height_above_ground
                 h = h + height_above_ground
                 
@@ -374,8 +376,10 @@ def cluster_and_sceneflow(lidar_with_sweeps, sample_idx, scene_save_dir):
     save_path = os.path.join(scene_save_dir, os.path.basename(lidar_path).replace('.bin', '.pkl'))
     with open(save_path, 'wb') as f:
         pickle.dump({
+            'sample_idx': sample_idx,
             'points_c': points_c.cpu().numpy(),
             'ground_points_c': ground_points_c.cpu().numpy(),
+            'cluster_labels': cluster_labels.cpu().numpy(),
             'cluster_results': cluster_results,
         }, f)
 
@@ -387,8 +391,8 @@ def parse_args():
     parser.add_argument('--cluster_min_size', type=int, default=16, help='Minimum size of clusters to be considered valid')
     parser.add_argument('--cluster_selection_epsilon', type=float, default=0.5, help='A distance threshold. Clusters below this value will be merged')
     parser.add_argument('--cluster_max_z_above_ground', type=float, default=1.0, help='Maximum height of clusters above ground to be considered valid')
-    parser.add_argument('--cluster_size_range', type=float, nargs=6, default=[0.25, 0.25, 0.25, 20, 6, 6], help='Range of cluster size to consider for filtering [l_min, w_min, h_min, l_max, w_max, h_max]')
-    parser.add_argument('--cluster_min_area', type=float, default=0.15, help='Minimum area of clusters for filtering')
+    parser.add_argument('--cluster_size_range', type=float, nargs=6, default=[0.25, 0.25, 0.4, 20, 6, 6], help='Range of cluster size to consider for filtering [l_min, w_min, h_min, l_max, w_max, h_max]')
+    parser.add_argument('--cluster_min_area', type=float, default=0.1, help='Minimum area of clusters for filtering')
     parser.add_argument('--cluster_max_ratio', type=float, default=8.0, help='Maximum ratio of length to width for clusters')
     parser.add_argument('--sceneflow_min_size', type=int, default=16, help='Minimum size of single frame clusters for sceneflow estimation')
     parser.add_argument('--sceneflow_max_size', type=int, default=800, help='Maximum size of single frame clusters for sceneflow estimation')
@@ -408,7 +412,7 @@ if __name__ == '__main__':
     with open(args.info_path, 'rb') as f:
         data_info = pickle.load(f)
 
-    for scene in data_info:
+    for scene in data_info[0:1]:
         scene_name = scene['scene_name']
         scene_save_dir = f"{args.save_dir}/{scene_name}"
         os.makedirs(scene_save_dir, exist_ok=True)
