@@ -9,7 +9,7 @@ def ground_removal(lidar_with_sweeps, sample_idx, scene_save_dir):
     points_c = []
     num_points = []
     start = max(0, sample_idx - (args.frame_len - 1) // 2)
-    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len + 1) // 2)
+    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len - 1) // 2)
     for i in range(start, end + 1):
         lidar_path = lidar_with_sweeps[i]['lidar_path']
         lidar2global = lidar_with_sweeps[i]['lidar2global']

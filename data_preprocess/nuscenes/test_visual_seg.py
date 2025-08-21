@@ -4,7 +4,6 @@ import open3d as o3d
 import numpy as np
 import pickle
 from pyquaternion import Quaternion
-from utils import find_clusters
 
 
 if __name__ == '__main__':

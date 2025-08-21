@@ -179,7 +179,7 @@ def get_object_points(lidar_with_sweeps, sample_idx, scene_save_dir):
     # 1. Load the point cloud data
     points_c = []
     start = max(0, sample_idx - (args.frame_len - 1) // 2)
-    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len + 1) // 2)
+    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len - 1) // 2)
     for i in range(start, end + 1):
         lidar_path = lidar_with_sweeps[i]['lidar_path']
         lidar2global = torch.tensor(lidar_with_sweeps[i]['lidar2global'], dtype=torch.float32).cuda()
@@ -350,7 +350,8 @@ def get_object_points(lidar_with_sweeps, sample_idx, scene_save_dir):
                 obj['rider'] = {
                     'id': ids[person_riding_pairs[j]] if ids is not None else -1,
                     'bbox_2d': bboxes[person_riding_pairs[j]],
-                    'mask_2d': object_contours[person_riding_pairs[j]]
+                    'mask_2d': object_contours[person_riding_pairs[j]],
+                    'score_2d': scores[person_riding_pairs[j]]
                 }
             objects.append(obj)
 
@@ -452,4 +453,4 @@ if __name__ == '__main__':
             for sample_idx in sample_idx_list:
                 get_object_points(lidar_with_sweeps, sample_idx, scene_save_dir)
 
-        print(f"Processed scene: {scene_name}, total samples: {len(sample_idx_list)}")
+        print(f"Processed scene: {scene_name} with {len(sample_idx_list)} samples.")
