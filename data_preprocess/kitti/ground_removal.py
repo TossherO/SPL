@@ -29,7 +29,6 @@ def ground_removal(lidar_path, save_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--frame_len', type=int, default=1, help='Number of frames to process at once')
     parser.add_argument('--info_path', type=str, default='./data/kitti/kitti_data_info.pkl', help='Path to the Kitti data info file')
     parser.add_argument('--save_dir', type=str, default='./data/kitti/is_ground', help='Directory to save the ground removal results')
     return parser.parse_args()
@@ -40,10 +39,17 @@ if __name__ == '__main__':
     with open(args.info_path, 'rb') as f:
         data_info = pickle.load(f)
     
-    for i, sample in enumerate(data_info['kitti_object']):
-        raw_data = data_info['kitti_raw'][sample['scene']]
-        lidar_path = raw_data[str(sample['sample_idx']).zfill(10)]['lidar_path']
-        save_path = os.path.join(args.save_dir, sample['name'] + '.bin')
-        ground_removal(lidar_path, save_path)
+    for scene in data_info['kitti_raw'].keys():
+        scene_save_dir = f"{args.save_dir}/{scene}"
+        os.makedirs(scene_save_dir, exist_ok=True)
+        frame_names = list(data_info['kitti_raw'][scene].keys())
+        frame_names.sort()
+
+        for name in frame_names:
+            lidar_path = data_info['kitti_raw'][scene][name]['lidar_path']
+            save_path = os.path.join(scene_save_dir, name + '.bin')
+            ground_removal(lidar_path, save_path)
+            
+        print(f"Processed scene: {scene} with {len(frame_names)} frames.")
 
     print("Ground removal processing completed.")

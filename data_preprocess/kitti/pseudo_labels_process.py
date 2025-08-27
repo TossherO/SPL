@@ -7,30 +7,6 @@ import cv2
 import time
 
 
-def load_ground_points(lidar_with_sweeps, sample_idx, scene_name):
-    ground_points_c = []
-    start = max(0, sample_idx - (args.frame_len - 1) // 2)
-    end = min(len(lidar_with_sweeps) - 1, sample_idx + (args.frame_len - 1) // 2)
-    for i in range(start, end + 1):
-        lidar_path = lidar_with_sweeps[i]['lidar_path']
-        lidar2global = torch.tensor(lidar_with_sweeps[i]['lidar2global'], dtype=torch.float32).cuda()
-        points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :3]
-        points = torch.tensor(points, dtype=torch.float32).cuda()
-        is_ground = np.fromfile(os.path.join(args.is_ground_dir, scene_name, os.path.basename(lidar_path)), dtype=bool)
-        is_ground = torch.tensor(is_ground, dtype=torch.bool).cuda()
-        R = lidar2global[:3, :3]
-        T = lidar2global[:3, 3]
-        points = (R @ points.T).T + T
-        ground_points = points[is_ground]
-        ground_points_c.append(ground_points)
-    ground_points_c = torch.cat(ground_points_c, dim=0)
-    lidar2global = torch.tensor(lidar_with_sweeps[sample_idx]['lidar2global'], dtype=torch.float32).cuda()
-    R_inv = lidar2global[:3, :3].T
-    T_inv = -R_inv @ lidar2global[:3, 3]
-    ground_points_c = (R_inv @ ground_points_c.T).T + T_inv
-    return ground_points_c
-
-
 def fit_bounding_box(points):
     """
     CUDA并行优化的L-shape框拟合算法（修正版）
@@ -210,7 +186,7 @@ def get_fitting_score(img_mask, bbox_3d_corners, lidar2img):
     return inter_area / union_area
 
 
-def process_3d_objects(objects, points, ground_points, lidar2imgs):
+def process_3d_objects(objects, points, ground_points, lidar2img):
     for i in range(len(objects)):
         points_object_indices = objects[i]['points']
         objects[i]['center_3d'] = None
@@ -222,7 +198,7 @@ def process_3d_objects(objects, points, ground_points, lidar2imgs):
         points_object = points[points_object_indices]
         objects[i]['points'] = points_object
 
-        if objects[i]['name'] in ['car', 'bus', 'truck']:
+        if objects[i]['name'] == 'car':
             if points_object.shape[0] > 10:
                 objects[i]['center_3d'] = points_object[:, :3].mean(dim=0).cpu().numpy()
 
@@ -242,9 +218,9 @@ def process_3d_objects(objects, points, ground_points, lidar2imgs):
                         z = z + dh
                         h = h - dh
 
-                if (l < args.vehicle_size_range[0] or l > args.vehicle_size_range[3] or
-                    w < args.vehicle_size_range[1] or w > args.vehicle_size_range[4] or
-                    h < args.vehicle_size_range[2] or h > args.vehicle_size_range[5]):
+                if (l < args.car_size_range[0] or l > args.car_size_range[3] or
+                    w < args.car_size_range[1] or w > args.car_size_range[4] or
+                    h < args.car_size_range[2] or h > args.car_size_range[5]):
                     continue
 
                 # 计算表面贴近比例（SPR）
@@ -294,20 +270,19 @@ def process_3d_objects(objects, points, ground_points, lidar2imgs):
             img_mask = np.zeros(args.img_hw, dtype=np.uint8)
             cv2.drawContours(img_mask, object_contours, -1, 255, thickness=cv2.FILLED)
             bbox_3d_corners = bbox_3d_to_corners(objects[i]['bbox_3d'])
-            lidar2img = lidar2imgs[objects[i]['cam']]
             score_3d = get_fitting_score(img_mask, bbox_3d_corners, lidar2img)
             objects[i]['score_3d'] = score_3d
                 
     return objects
 
 
-def process_stream(scene_results, lidar2imgs):
-    scene_pseudo_labels = [{'pseudo_labels_2d': [], 'pseudo_labels_3d': []} for _ in range(len(scene_results))]
+def process_stream(stream_results):
+    pseudo_labels = [{'pseudo_labels_2d': [], 'pseudo_labels_3d': []} for _ in range(len(stream_results))]
     instances = {}
     instance_token_list = []
 
-    for i in range(len(scene_results)):
-        objects = scene_results[i]['objects']
+    for i in range(len(stream_results)):
+        objects = stream_results[i]['objects']
         for obj in objects:
             if obj['name'] == 'person_rider':
                 continue
@@ -329,9 +304,8 @@ def process_stream(scene_results, lidar2imgs):
 
             if obj['center_3d'] is None:
                 if obj['score_2d'] > 0.2:
-                    scene_pseudo_labels[i]['pseudo_labels_2d'].append({
+                    pseudo_labels[i]['pseudo_labels_2d'].append({
                         'name': obj['name'],
-                        'cam': obj['cam'],
                         'bbox_2d': obj['bbox_2d'],
                         'mask_2d': obj['mask_2d'],
                         'score_2d': obj['score_2d'],
@@ -340,11 +314,10 @@ def process_stream(scene_results, lidar2imgs):
                 if obj['id'] == -1:
                     instance_token = f"{time.time()}"
                 else:
-                    instance_token = f"{obj['name'].split('_')[0]}_{obj['cam']}_{obj['id']}"
+                    instance_token = f"{obj['name'].split('_')[0]}_{obj['id']}"
                 if instances.get(instance_token, None) is None:
                     instances[instance_token] = {
                         'name': obj['name'].split('_')[0],
-                        'cam': obj['cam'],
                         'data_list': [],
                     }
                     instance_token_list.append(instance_token)
@@ -360,14 +333,12 @@ def process_stream(scene_results, lidar2imgs):
                 })
 
     class_map = {
-        'car': 'vehicle',
-        'bus': 'vehicle',
-        'truck': 'vehicle',
+        'car': 'car',
         'motorcycle': 'cyclist',
         'bicycle': 'cyclist',
         'person': 'pedestrian'
     }
-    instance_counts = {'vehicle': 0, 'pedestrian': 0, 'cyclist': 0}
+    instance_counts = {'car': 0, 'pedestrian': 0, 'cyclist': 0}
 
     for instance_token in instance_token_list:
         instance = instances[instance_token]
@@ -380,8 +351,8 @@ def process_stream(scene_results, lidar2imgs):
             rot_list = []
             pos_list = []
             for data in instance['data_list']:
-                t_list.append(scene_results[data['sample_idx']]['timestamp'])
-                lidar2global = scene_results[data['sample_idx']]['lidar2global']
+                t_list.append(stream_results[data['sample_idx']]['timestamp'])
+                lidar2global = stream_results[data['sample_idx']]['lidar2global']
                 R = lidar2global[:3, :3]
                 t = lidar2global[:3, 3]
                 rot_list.append(R)
@@ -395,7 +366,7 @@ def process_stream(scene_results, lidar2imgs):
                 vel_list.append(rot_list[i + 1].T @ v)
             vel_list.append(rot_list[-1].T @ d_list[-1] / dt_list[-1])
 
-        if label == 'vehicle':
+        if label == 'car':
             max_lwh = [0, 0, 0]
             for i, data in enumerate(instance['data_list']):
                 data['vel_3d'] = vel_list[i]
@@ -427,7 +398,7 @@ def process_stream(scene_results, lidar2imgs):
                         l, w, h = bboxdimensions
                         R_inv = T_reference_bbox[:3, :3].T
                         T_inv = -R_inv @ T_reference_bbox[:3, 3]
-                        ground_points = scene_results[data['sample_idx']]['ground_points']
+                        ground_points = stream_results[data['sample_idx']]['ground_points']
                         ground_points_r = (R_inv @ ground_points[:, :3].T).T + T_inv
                         ground_points_r = ground_points_r[(ground_points_r[:, 0] ** 2 + ground_points_r[:, 1] ** 2) < 1.0]
                         if ground_points_r.shape[0] > 10:
@@ -440,7 +411,7 @@ def process_stream(scene_results, lidar2imgs):
                         img_mask = np.zeros(args.img_hw, dtype=np.uint8)
                         cv2.drawContours(img_mask, object_contours, -1, 255, thickness=cv2.FILLED)
                         bbox_3d_corners = bbox_3d_to_corners(data['bbox_3d'])
-                        lidar2img = lidar2imgs[instance['cam']]
+                        lidar2img = stream_results[data['sample_idx']]['lidar2imgs']
                         score_3d = get_fitting_score(img_mask, bbox_3d_corners, lidar2img)
                         data['score_3d'] = score_3d
 
@@ -461,10 +432,9 @@ def process_stream(scene_results, lidar2imgs):
 
         instance_counts[label] += 1
         for data in instance['data_list']:
-            scene_pseudo_labels[data['sample_idx']]['pseudo_labels_3d'].append({
+            pseudo_labels[data['sample_idx']]['pseudo_labels_3d'].append({
                 'name': label,
                 'id': instance_counts[label],
-                'cam': instance['cam'],
                 'bbox_2d': data['bbox_2d'],
                 'mask_2d': data['mask_2d'],
                 'score_2d': data['score_2d'],
@@ -474,19 +444,20 @@ def process_stream(scene_results, lidar2imgs):
                 'vel_3d': data['vel_3d'],
                 'max_lwh': data.get('max_lwh', None)
             })
-    return scene_pseudo_labels
+    _pseudo_labels = {stream_results[i]['name']: labels for i, labels in enumerate(pseudo_labels)}
+    return _pseudo_labels
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--frame_len', type=int, default=11, help='Number of frames to process at once')
-    parser.add_argument('--img_hw', type=int, nargs=2, default=[900, 1600], help='Image width and height for projection')
-    parser.add_argument('--vehicle_size_range', type=float, nargs=6, default=[2.0, 1.2, 1.2, 20.0, 6.0, 6.0], help='Range of vehicle sizes [min_length, min_width, min_height, max_length, max_width, max_height]')
-    parser.add_argument('--other_size_range', type=float, nargs=6, default=[0.25, 0.2, 0.5, 4.0, 2.0, 2.5], help='Range of other object sizes [min_length, min_width, min_height, max_length, max_width, max_height]')
-    parser.add_argument('--info_path', type=str, default='./data/nuscenes/nuscenes_data_info.pkl', help='Path to the NuScenes data info file')
-    parser.add_argument('--is_ground_dir', type=str, default='./data/nuscenes/is_ground', help='Directory containing ground removal results')
-    parser.add_argument('--objects_dir', type=str, default='./data/nuscenes/3d_objects', help='Directory containing 3D object results')
-    parser.add_argument('--save_dir', type=str, default='./data/nuscenes/pseudo_labels', help='Directory to save the processed pseudo labels')
+    parser.add_argument('--pc_range', type=float, nargs=6, default=[0, -40.0, -3.0, 70.4, 40.0, 1.0], help='Point cloud range [x_min, y_min, z_min, x_max, y_max, z_max]')
+    parser.add_argument('--img_hw', type=int, nargs=2, default=[375, 1242], help='Image width and height for projection')
+    parser.add_argument('--car_size_range', type=float, nargs=6, default=[2.0, 1.2, 1.2, 7.0, 2.0, 3.0], help='Range of car sizes [min_length, min_width, min_height, max_length, max_width, max_height]')
+    parser.add_argument('--other_size_range', type=float, nargs=6, default=[0.25, 0.2, 0.5, 2.5, 1.0, 2.5], help='Range of other object sizes [min_length, min_width, min_height, max_length, max_width, max_height]')
+    parser.add_argument('--info_path', type=str, default='./data/kitti/kitti_data_info.pkl', help='Path to the KITTI data info file')
+    parser.add_argument('--is_ground_dir', type=str, default='./data/kitti/is_ground', help='Directory containing ground removal results')
+    parser.add_argument('--objects_dir', type=str, default='./data/kitti/3d_objects', help='Directory containing 3D object results')
+    parser.add_argument('--save_dir', type=str, default='./data/kitti/pseudo_labels', help='Directory to save the processed pseudo labels')
     return parser.parse_args()
 
 
@@ -495,58 +466,48 @@ if __name__ == '__main__':
     with open(args.info_path, 'rb') as f:
         data_info = pickle.load(f)
 
-    for scene in data_info:
-        scene_name = scene['scene_name']
-        lidar_with_sweeps = []
-        sample_idx_list = []
-        count = 0
-        for sample in scene['samples']:
-            for sweep in sample['lidar_sweep']:
-                lidar_with_sweeps.append({
-                    'timestamp': sweep['timestamp'],
-                    'lidar_path': sweep['lidar_path'],
-                    'lidar2global': sweep['ego2global'] @ sample['lidar2ego'],
-                })
-                count += 1
-            lidar_with_sweeps.append({
-                'timestamp': sample['timestamp'],
-                'lidar_path': sample['lidar_path'],
-                'lidar2global': sample['ego2global'] @ sample['lidar2ego'],
-                'cams': sample['cams']
-            })
-            sample_idx_list.append(count)
-            count += 1
-
-        scene_results = []
+    for scene in data_info['kitti_raw'].keys():
+        raw_data = data_info['kitti_raw'][scene]
+        frame_names = list(raw_data.keys())
+        frame_names.sort()
+        scene_pseudo_labels = {}
+        stream_results = []
+        
         with torch.no_grad():
-            for sample_idx in sample_idx_list:
-                lidar_path = lidar_with_sweeps[sample_idx]['lidar_path']
-                object_path = os.path.join(args.objects_dir, scene_name, os.path.basename(lidar_path).replace('.bin', '.pkl'))
-                
+            for i in range(len(frame_names)):
+                name = frame_names[i]
+                points = np.fromfile(raw_data[name]['lidar_path'], dtype=np.float32).reshape(-1, 4)
+                points = torch.tensor(points, dtype=torch.float32).cuda()
+                is_ground = np.fromfile(os.path.join(args.is_ground_dir, scene, name + '.bin'), dtype=bool)
+                is_ground = torch.tensor(is_ground, dtype=torch.bool).cuda()
+                ground_points = points[is_ground]
+                points = points[~is_ground]
+                pc_range = torch.tensor(np.array(args.pc_range, dtype=np.float32).reshape(2, 3)).cuda()
+                mask = torch.all((points[:, :3] >= pc_range[0]) & (points[:, :3] <= pc_range[1]), axis=1)
+                points = points[mask]
+
+                object_path = os.path.join(args.objects_dir, scene, name + '.pkl')
                 with open(object_path, 'rb') as f:
                     objects_info = pickle.load(f)
                 objects = objects_info['objects']
-                points = torch.tensor(objects_info['points'], dtype=torch.float32).cuda()
-                ground_points = load_ground_points(lidar_with_sweeps, sample_idx, scene_name)
-                
-                cam_infos = lidar_with_sweeps[sample_idx]['cams']
-                lidar2imgs = {}
-                for cam in cam_infos:
-                    cam2img = np.eye(4, dtype=np.float32)
-                    cam2img[:3, :3] = cam_infos[cam]['cam2img'][:3, :3]
-                    lidar2imgs[cam] = cam2img @ cam_infos[cam]['lidar2cam']
+                lidar2img = objects_info['lidar2img']
 
-                results = process_3d_objects(objects, points, ground_points, lidar2imgs)
-                scene_results.append({
-                    'timestamp': lidar_with_sweeps[sample_idx]['timestamp'],
-                    'lidar2global': lidar_with_sweeps[sample_idx]['lidar2global'],
+                results = process_3d_objects(objects, points, ground_points, lidar2img)
+                stream_results.append({
+                    'name': name,
+                    'timestamp': raw_data[name]['timestamp'],
+                    'lidar2global': raw_data[name]['lidar2global'],
+                    'lidar2img': lidar2img,
                     'objects': results,
                     'ground_points': ground_points,
                 })
-            scene_pseudo_labels = process_stream(scene_results, lidar2imgs)
 
-        save_path = f"{args.save_dir}/{scene_name}.pkl"
+                if i == len(frame_names) - 1 or int(frame_names[i+1]) - int(name) > 1:
+                    scene_pseudo_labels.update(process_stream(stream_results))
+                    stream_results = []
+
+        save_path = f"{args.save_dir}/{scene}.pkl"
         with open(save_path, 'wb') as f:
             pickle.dump(scene_pseudo_labels, f)
 
-        print(f"Processed scene: {scene_name} with {len(scene_results)} samples.")
+        print(f"Processed scene: {scene} with {len(scene_pseudo_labels)} frames.")

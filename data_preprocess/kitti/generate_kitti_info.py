@@ -7,7 +7,7 @@ import pickle
 
 def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--frame_len', type=int, default=5, help='Number of frames to process at once')
+    parser.add_argument('--frame_len', type=int, default=11, help='Number of frames to process at once')
     parser.add_argument('--data_root', type=str, default='./data/kitti', help='Path to the KITTI dataset root directory')
     parser.add_argument('--data_root_raw', type=str, default='./data/kitti/kitti_raw', help='Path to the raw KITTI dataset root directory')
     parser.add_argument('--save_path', type=str, default='./data/kitti/kitti_data_info.pkl', help='Path to save the generated data info')
@@ -46,31 +46,36 @@ if __name__ == '__main__':
                         timestamp = text[j].strip().split()[1].split(':')
                         timestamp = float(timestamp[1]) * 60 + float(timestamp[2])
 
-                    with open(os.path.join(raw_dir, 'oxts', 'data', name + '.txt'), 'r') as f:
-                        oxt = f.readlines()[0].strip().split()
-                        lat, lon, alt, roll, pitch, yaw = [float(info) for info in oxt[:6]]
-                        scale = np.cos(lat * np.pi / 180.)
-                        er = 6378137.  # earth radius (approx.) in meters
-                        tx = scale * lon * np.pi * er / 180.
-                        ty = scale * er * np.log(np.tan((90. + lat) * np.pi / 360.))
-                        tz = alt
-                        t = np.array([tx, ty, tz])
-                        if origin is None:
-                            origin = t
-                        t = t - origin
-                        Rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
-                        Ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
-                        Rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
-                        R = Rz @ Ry @ Rx
-                        ego2global = np.eye(4)
-                        ego2global[:3, :3] = R
-                        ego2global[:3, 3] = t
-                        
+                    # with open(os.path.join(raw_dir, 'oxts', 'data', name + '.txt'), 'r') as f:
+                    #     oxt = f.readlines()[0].strip().split()
+                    #     lat, lon, alt, roll, pitch, yaw = [float(info) for info in oxt[:6]]
+                    #     scale = np.cos(lat * np.pi / 180.)
+                    #     er = 6378137.  # earth radius (approx.) in meters
+                    #     tx = scale * lon * np.pi * er / 180.
+                    #     ty = scale * er * np.log(np.tan((90. + lat) * np.pi / 360.))
+                    #     tz = alt
+                    #     t = np.array([tx, ty, tz])
+                    #     if origin is None:
+                    #         origin = t
+                    #     t = t - origin
+                    #     Rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
+                    #     Ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
+                    #     Rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+                    #     R = Rz @ Ry @ Rx
+                    #     ego2global = np.eye(4)
+                    #     ego2global[:3, :3] = R
+                    #     ego2global[:3, 3] = t
+
+                    with open(os.path.join(raw_dir, 'poses.txt'), 'r') as f:
+                        text = f.readlines()
+                        lidar2global = text[j].strip().split()
+                        lidar2global = np.array([float(info) for info in lidar2global]).reshape([4, 4])
+
                     data_info['kitti_raw'][scene][name] = {
                         'timestamp': timestamp,
                         'lidar_path': os.path.join(raw_dir, 'velodyne_points', 'data', name + '.bin'),
                         'img_path': os.path.join(raw_dir, 'image_02', 'data', name + '.png'),
-                        'ego2global': ego2global
+                        'lidar2global': lidar2global
                     }
 
             with open(os.path.join(args.data_root, 'training', 'calib', str(i).zfill(6) + '.txt')) as f:
