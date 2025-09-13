@@ -18,16 +18,25 @@ if __name__ == '__main__':
     args = parse_args()
     mapping_dir = os.path.join(args.data_root, 'devkit_object', 'mapping')
     mapping_raw = []
+    train_indices = set()
     with open(os.path.join(mapping_dir, 'train_mapping.txt'), 'r') as f:
         for line in f:
             mapping_raw.append(line.strip().split())
     with open(os.path.join(mapping_dir, 'train_rand.txt'), 'r') as f:
         text = f.readline()
         mapping_id = [int(idx)-1 for idx in text.strip().split(',')]
+    with open(os.path.join(args.data_root, 'ImageSets', 'train.txt'), 'r') as f:
+        text = f.readlines()
+        for line in text:
+            train_indices.add(int(line.strip()))
 
     data_info = {'kitti_object': [], 'kitti_raw': {}}
-    origin = None
+    # origin = None
+    count = 0
     for i, idx in enumerate(mapping_id):
+        if i not in train_indices:
+            continue
+
         raw_dir = os.path.join(args.data_root_raw, mapping_raw[idx][0], mapping_raw[idx][1])
         scene = mapping_raw[idx][1]
         if os.path.exists(raw_dir):
@@ -43,8 +52,18 @@ if __name__ == '__main__':
                 if data_info['kitti_raw'][scene].get(name, None) is None:
                     with open(os.path.join(raw_dir, 'velodyne_points', 'timestamps.txt'), 'r') as f:
                         text = f.readlines()
-                        timestamp = text[j].strip().split()[1].split(':')
-                        timestamp = float(timestamp[1]) * 60 + float(timestamp[2])
+                        if len(text[j].strip().split()) > 1:
+                            timestamp = text[j].strip().split()[1].split(':')
+                            timestamp = float(timestamp[1]) * 60 + float(timestamp[2])
+                        else:
+                            if j < sample_idx:
+                                start = j + 1
+                                print(f'warning: no timestamp {raw_dir} {name}, change start to {start}')
+                                continue
+                            elif j > sample_idx:
+                                end = j - 1
+                                print(f'warning: no timestamp {raw_dir} {name}, change end to {end}')
+                                break
 
                     # with open(os.path.join(raw_dir, 'oxts', 'data', name + '.txt'), 'r') as f:
                     #     oxt = f.readlines()[0].strip().split()
@@ -93,6 +112,11 @@ if __name__ == '__main__':
                                               'cam2img': cam2img, 'lidar2cam': lidar2cam, 'ego2lidar': ego2lidar,
                                               'label': os.path.join(args.data_root, 'training', 'label_2', str(i).zfill(6) + '.txt')})
             
+            count += 1
+            if count % 100 == 0:
+                print(f'Processed {count}/{len(train_indices)} samples.')
+
+    print(f'Processed {count}/{len(train_indices)} samples.')
     with open(args.save_path, 'wb') as f:
         pickle.dump(data_info, f)
     print(f"Data info saved to {args.save_path}.")

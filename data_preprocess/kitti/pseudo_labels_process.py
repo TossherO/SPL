@@ -411,7 +411,7 @@ def process_stream(stream_results):
                         img_mask = np.zeros(args.img_hw, dtype=np.uint8)
                         cv2.drawContours(img_mask, object_contours, -1, 255, thickness=cv2.FILLED)
                         bbox_3d_corners = bbox_3d_to_corners(data['bbox_3d'])
-                        lidar2img = stream_results[data['sample_idx']]['lidar2imgs']
+                        lidar2img = stream_results[data['sample_idx']]['lidar2img']
                         score_3d = get_fitting_score(img_mask, bbox_3d_corners, lidar2img)
                         data['score_3d'] = score_3d
 

@@ -417,3 +417,5 @@ if __name__ == '__main__':
         count += 1
         if count % 100 == 0:
             print(f"Processed {count} / {len(data_info['kitti_object'])} samples.")
+            
+    print(f"Processed {count} / {len(data_info['kitti_object'])} samples.")
