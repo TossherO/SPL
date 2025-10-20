@@ -45,6 +45,15 @@ MODEL:
                 'rot': {'out_channels': 2, 'num_conv': 2},
             }
 
+        PROTOTYPE_CONFIG:
+            PATH: ../ckpts/prototype_features/centerpoint_kitti_prototype_features.pth
+            NUM_CLASS: 3
+            NUM_PROTO: 10
+            BANK_SIZE: 100
+            FEATURE_DIM: 64
+            PROTO_FEATURE_THRESHOLD: 0.5
+            PSEUDO_LABEL_THRESHOLD: 0.5
+
         TARGET_ASSIGNER_CONFIG:
             FEATURE_MAP_STRIDE: 4
             NUM_MAX_OBJS: 500

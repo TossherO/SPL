@@ -35,6 +35,8 @@ def save_prototype(proto_features, feature_bank, feature_count, prototype_cfg, s
         'feature_bank': feature_bank,
         'feature_count': feature_count,
     }
+    if not os.path.exists(os.path.dirname(prototype_path)):
+        os.makedirs(os.path.dirname(prototype_path))
     torch.save(prototype_data, prototype_path)
     print(f'Prototype saved to {prototype_path}')
 

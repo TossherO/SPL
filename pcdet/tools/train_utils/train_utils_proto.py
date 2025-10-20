@@ -175,9 +175,11 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         if hasattr(model, 'module'):
             model.module.dense_head.proto_features.data = proto_features
             model.module.dense_head.feat2proto_count.data[mask] = feat2proto_count[mask]
+            model.module.dense_head.refresh_new_features()
         else:
             model.dense_head.proto_features.data = proto_features
             model.dense_head.feat2proto_count.data[mask] = feat2proto_count[mask]
+            model.dense_head.refresh_new_features()
         
     if rank == 0:
         pbar.close()
