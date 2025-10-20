@@ -328,7 +328,7 @@ class CenterHead_prototype(nn.Module):
             logits = logit_scale * (feats.unsqueeze(1) @ protos.permute(0, 2, 1)).squeeze(1)  # (N_c, 1 + (NUM_CLASS - 1) * NUM_PROTO)
             labels_contrastive = torch.zeros_like(labels).long()  # (N_c,)
             contrastive_loss = F.cross_entropy(logits, labels_contrastive)
-            loss += contrastive_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['contrastive_weight']
+            loss += contrastive_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['contrastive_weight'] / self.prototype_cfg.NUM_CLASS
             tb_dict['contrastive_loss_class_%d' % class_id] = contrastive_loss.item()
 
         tb_dict['rpn_loss'] = loss.item()
