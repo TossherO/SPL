@@ -2,7 +2,11 @@ CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset.yaml
-
+    INFO_PATH: {
+        'train': [kitti_infos_train_sparse.pkl],
+        'test': [kitti_infos_val.pkl],
+    }
+    
 MODEL:
     NAME: CenterPoint
 
@@ -64,6 +68,7 @@ MODEL:
             LOSS_WEIGHTS: {
                 'cls_weight': 1.0,
                 'loc_weight': 2.0,
+                'contrastive_weight': 1.0,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
             }
         POST_PROCESSING:

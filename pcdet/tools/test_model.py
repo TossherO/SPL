@@ -7,7 +7,6 @@ from pcdet.models import build_network
 from pcdet.datasets import build_dataloader
 from pcdet.utils import common_utils
 from pcdet.models import load_data_to_gpu
-from mmdet3d.utils import register_all_modules
 import pickle
 
 # info_path = '../data/nuscenes/v1.0-mini/nuscenes_dbinfos_10sweeps_withvelo.pkl'
@@ -17,32 +16,14 @@ import pickle
 # print(infos.keys())
 # print(sum([len(infos[k]) for k in infos.keys()]))
 
-# cfg_file = './cfgs/lion_models/lion_mamba_nusc_8x_1f_1x_one_stride_128dim_ep48.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba2_nus.yaml'
-# cfg_file = './cfgs/lion_models/lion_bimamba_nus.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_stream.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_stream2.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_stream3.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_stream3.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba2_stream.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_unitr_nus3.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_unitr3_stream.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba2_unitr.yaml'
-cfg_file = './cfgs/lion_models/lion_mamba_unitr_convnext.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_unitr_swint.yaml'
-# cfg_file = './cfgs/lion_models/lion_mamba_nus_tta.yaml'
+cfg_file = './cfgs/my_models/centerpoint_kitti.yaml'
 cfg_from_yaml_file(cfg_file, cfg)
 cfg.TAG = Path(cfg_file).stem
-# pretrained_model = '../output/cfgs/lion_models/lion_mamba_nusc_8x_1f_1x_one_stride_128dim_ep48/default/ckpt/checkpoint_epoch_48.pth'
-# pretrained_model = '../output/cfgs/lion_models/lion_mamba2_nus/default/ckpt/checkpoint_epoch_48.pth'
-# pretrained_model = '../output/cfgs/lion_models/lion_mamba_stream2/default/checkpoint_iter_42174.pth'
-# pretrained_model = '../output/cfgs/lion_models/lion_mamba_unitr_nus3/default/ckpt/checkpoint_epoch_44.pth'
-pretrained_model = '../output/cfgs/lion_models/lion_mamba_unitr_convnext/default/ckpt/checkpoint_epoch_12.pth'
-# pretrained_model = '../output/cfgs/lion_models/lion_mamba_unitr_swint/default/ckpt/checkpoint_epoch_12.pth'
+# pretrained_model = '../output/cfgs/lion_models/lion_mamba_unitr_convnext/default/ckpt/checkpoint_epoch_12.pth'
 
 logger = common_utils.create_logger('output/log.txt', rank=cfg.LOCAL_RANK)
 
-cfg.DATA_CONFIG.VERSION = 'v1.0-mini'
+# cfg.DATA_CONFIG.VERSION = 'v1.0-mini'
 cfg.DATA_CONFIG.DATA_PROCESSOR[1]['SHUFFLE_ENABLED']['train'] = False
 cfg.DATA_CONFIG.DATA_PROCESSOR[1]['SHUFFLE_ENABLED']['test'] = False
 
@@ -50,12 +31,11 @@ train = False
 test_set, test_loader, sampler = build_dataloader(
     dataset_cfg=cfg.DATA_CONFIG,
     class_names=cfg.CLASS_NAMES,
-    batch_size=2,
+    batch_size=4,
     dist=False, workers=4, logger=logger, training=train
 )
-register_all_modules()
 model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=test_set)
-model.load_params_from_file(filename=pretrained_model, to_cpu=False, logger=logger)
+# model.load_params_from_file(filename=pretrained_model, to_cpu=False, logger=logger)
 # it, epoch = model.load_params_with_optimizer(filename=pretrained_model, to_cpu=False, optimizer=None, logger=logger)
 # print(it, epoch)
 
