@@ -1,8 +1,8 @@
-import os
 import copy
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.init import kaiming_normal_
 from ..model_utils import model_nms_utils
 from ..model_utils import centernet_utils
@@ -106,12 +106,24 @@ class CenterHead_prototype(nn.Module):
             (self.prototype_cfg.NUM_CLASS, self.prototype_cfg.NUM_PROTO, self.prototype_cfg.FEATURE_DIM)).float(), requires_grad=False)
         self.feat2proto_count = nn.Parameter(torch.zeros((self.prototype_cfg.NUM_CLASS, self.prototype_cfg.NUM_PROTO)).long(), requires_grad=False)
         self.proto_proj = nn.Sequential(
-            nn.Linear(self.prototype_cfg.SHARED_CONV_CHANNEL, self.prototype_cfg.FEATURE_DIM),
-            nn.BatchNorm1d(self.prototype_cfg.FEATURE_DIM),
+            nn.Conv2d(
+                input_channels, self.model_cfg.SHARED_CONV_CHANNEL, 3, stride=1, padding=1,
+                bias=self.model_cfg.get('USE_BIAS_BEFORE_NORM', False)
+            ),
+            norm_func(self.model_cfg.SHARED_CONV_CHANNEL),
             nn.ReLU(),
-            nn.Linear(self.prototype_cfg.FEATURE_DIM, self.prototype_cfg.FEATURE_DIM),
+            nn.Conv2d(
+                self.model_cfg.SHARED_CONV_CHANNEL, self.prototype_cfg.FEATURE_DIM, 1, stride=1, padding=0,
+                bias=True
+            ),
         )
-        self.new_features = [torch.zeros((0, self.prototype_cfg.FEATURE_DIM)).float().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
+        self.logit_scale = nn.Parameter(torch.ones([]))
+        self.new_features = None  # list of (N_c, D), len = NUM_CLASS
+        self.new_features_labels = None  # list of (N_c,), len = NUM_CLASS
+        self.proto_feature_thre = self.prototype_cfg.PROTO_FEATURE_THRESHOLD
+        self.pseudo_label_thre = self.prototype_cfg.PSEUDO_LABEL_THRESHOLD
+        nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
+        self.refresh_new_features()
 
     def build_losses(self):
         self.add_module('hm_loss_func', loss_utils.FocalLossCenterNet())
@@ -303,7 +315,21 @@ class CenterHead_prototype(nn.Module):
                         loss += (batch_box_preds_for_iou * 0.).sum()
                         tb_dict['iou_reg_loss_head_%d' % idx] = (batch_box_preds_for_iou * 0.).sum()
 
-
+        # Constrastive loss for prototype learning
+        logit_scale = self.logit_scale.exp()
+        for class_id in range(self.prototype_cfg.NUM_CLASS):
+            if self.new_features[class_id].shape[0] == 0:
+                continue
+            feats = self.new_features[class_id]  # (N_c, D)
+            labels = self.new_features_labels[class_id]  # (N_c,)
+            pos_protos = self.proto_features[class_id, labels, :]  # (N_c, D)
+            neg_protos = self.proto_features[torch.arange(self.prototype_cfg.NUM_CLASS) != class_id].view(-1, self.prototype_cfg.FEATURE_DIM)  # ((NUM_CLASS - 1) * NUM_PROTO, D)
+            protos = torch.cat([pos_protos.unsqueeze(1), neg_protos.unsqueeze(0).expand(feats.shape[0], -1, -1)], dim=1)  # (N_c, 1 + (NUM_CLASS - 1) * NUM_PROTO, D)
+            logits = logit_scale * (feats.unsqueeze(1) @ protos.permute(0, 2, 1)).squeeze(1)  # (N_c, 1 + (NUM_CLASS - 1) * NUM_PROTO)
+            labels_contrastive = torch.zeros_like(labels).long()  # (N_c,)
+            contrastive_loss = F.cross_entropy(logits, labels_contrastive)
+            loss += contrastive_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['contrastive_weight']
+            tb_dict['contrastive_loss_class_%d' % class_id] = contrastive_loss.item()
 
         tb_dict['rpn_loss'] = loss.item()
         return loss, tb_dict
@@ -409,6 +435,7 @@ class CenterHead_prototype(nn.Module):
                 data_dict['gt_boxes'], feature_map_size=spatial_features_2d.size()[2:],
                 feature_map_stride=data_dict.get('spatial_features_2d_strides', None)
             )
+            target_dict = self.prototype_learning(x, target_dict)
             self.forward_ret_dict['target_dicts'] = target_dict
 
         self.forward_ret_dict['pred_dicts'] = pred_dicts
@@ -428,3 +455,74 @@ class CenterHead_prototype(nn.Module):
                 data_dict['final_box_dicts'] = pred_dicts
 
         return data_dict
+
+    def refresh_new_features(self):
+        self.new_features = [torch.zeros((0, self.prototype_cfg.FEATURE_DIM)).float().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
+        self.new_features_labels = [torch.zeros((0,)).long().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
+
+    def prototype_learning(self, x, target_dict):
+        """
+        Args:
+            x: (B, D, H, W)
+            target_dict:
+                'heatmaps': list of (B, num_classes, H, W)
+                'target_boxes': list of (B, M, 8)
+                'inds': list of (B, M)
+                'masks': list of (B, M)
+                'target_boxes_src': list of (B, M, 9)
+
+        Returns:
+
+        """
+        # feature extraction
+        feats = self.proto_proj(x).permute(0, 2, 3, 1)  # (B, H, W, D)
+        feats = F.normalize(feats, p=2, dim=-1)
+
+        # compute cosine similarity and assign prototypes
+        cos_sim = (feats[:, :, :, None, None, None, :] @ self.proto_features[None, None, None, :, :, :, None]).squeeze(-1, -2)  # (B, H, W, NUM_CLASS, NUM_PROTO)
+        max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
+        cos_sim_rect = cos_sim / (self.feat2proto_count + 1).log().clamp(min=1.0)[None, None, None, :, :]
+        max_sim_rect, max_proto_ids_rect = cos_sim_rect.max(dim=-1)  # (B, H, W, NUM_CLASS)
+        
+        for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
+            heatmaps = target_dict['heatmaps'][idx]  # (B, num_classes, H, W)
+
+            # collect gt features for prototype updating
+            gt_inds = torch.where(heatmaps == 1)  # (4, M) (B, class_id, y, x)
+            gt_feats = feats[gt_inds[0], gt_inds[2], gt_inds[3], :]  # (M, D)
+            gt_class_ids = cur_class_ids[gt_inds[1]]  # (M,)
+            gt_proto_ids = max_proto_ids_rect[gt_inds[0], gt_inds[2], gt_inds[3], gt_class_ids]  # (M,)
+            for class_id in cur_class_ids:
+                class_mask = (gt_class_ids == class_id)
+                if class_mask.sum() == 0:
+                    continue
+                class_feats = gt_feats[class_mask]  # (N_c, D)
+                self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats], dim=0)
+                self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], gt_proto_ids[class_mask]], dim=0)
+
+            # remove gt positions from max_sim to avoid duplicate counting
+            heatmap_inds = torch.where(heatmaps > 0)  # (4, N) (B, class_id, y, x)
+            max_sim[heatmap_inds[0], heatmap_inds[2], heatmap_inds[3], cur_class_ids[heatmap_inds[1]]] = 0
+
+        max_sim, max_class_ids = max_sim.max(dim=-1)  # (B, H, W)
+
+        # collect similar features for prototype updating
+        sim_mask = (max_sim > self.proto_feature_thre)
+        for class_id in range(self.prototype_cfg.NUM_CLASS):
+            class_mask = (max_class_ids == class_id) & sim_mask  # (B, H, W)
+            if class_mask.sum() == 0:
+                continue
+            class_feats = feats[class_mask]  # (N_c, D)
+            self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats], dim=0)
+            self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], max_proto_ids_rect[class_mask][:, class_id]], dim=0)
+
+        # collect pseudo-labeled features and refine heatmaps
+        pseudo_mask = (max_sim > self.pseudo_label_thre)
+        for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
+            pseudo_heatmap = torch.zeros_like(target_dict['heatmaps'][idx])  # (B, num_classes, H, W)
+            for i, class_id in enumerate(cur_class_ids):
+                class_mask = (max_class_ids == class_id) & pseudo_mask  # (B, H, W)
+                pseudo_heatmap[:, i, :, :][class_mask] = max_sim[:, :, :][class_mask]
+            target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
+
+        return target_dict

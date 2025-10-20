@@ -54,7 +54,7 @@ def prototype_update(proto_features, feature_bank, feature_count, new_features, 
     for class_id in range(num_class):
         if len(new_features[class_id]) == 0:
             continue
-        features = torch.concat([feature_bank[class_id, :feature_count[class_id]]] + new_features[class_id], dim=0)  # (num_old + num_new, feature_dim)
+        features = torch.cat([feature_bank[class_id, :feature_count[class_id]], new_features[class_id]], dim=0)  # (num_old + num_new, feature_dim)
         
         if len(features) < num_prototype:
             proto_features[class_id, :len(features)] = features
