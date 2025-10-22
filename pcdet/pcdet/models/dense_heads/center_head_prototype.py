@@ -107,7 +107,7 @@ class CenterHead_prototype(nn.Module):
         self.feat2proto_count = nn.Parameter(torch.zeros((self.prototype_cfg.NUM_CLASS, self.prototype_cfg.NUM_PROTO)).long(), requires_grad=False)
         self.proto_proj = nn.Sequential(
             nn.Conv2d(
-                input_channels, self.model_cfg.SHARED_CONV_CHANNEL, 3, stride=1, padding=1,
+                self.model_cfg.SHARED_CONV_CHANNEL, self.model_cfg.SHARED_CONV_CHANNEL, 3, stride=1, padding=1,
                 bias=self.model_cfg.get('USE_BIAS_BEFORE_NORM', False)
             ),
             norm_func(self.model_cfg.SHARED_CONV_CHANNEL),
@@ -478,11 +478,14 @@ class CenterHead_prototype(nn.Module):
         feats = self.proto_proj(x).permute(0, 2, 3, 1)  # (B, H, W, D)
         feats = F.normalize(feats, p=2, dim=-1)
 
-        # compute cosine similarity and assign prototypes
-        cos_sim = (feats[:, :, :, None, None, None, :] @ self.proto_features[None, None, None, :, :, :, None]).squeeze(-1, -2)  # (B, H, W, NUM_CLASS, NUM_PROTO)
-        max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
-        cos_sim_rect = cos_sim / (self.feat2proto_count + 1).log().clamp(min=1.0)[None, None, None, :, :]
-        max_sim_rect, max_proto_ids_rect = cos_sim_rect.max(dim=-1)  # (B, H, W, NUM_CLASS)
+        # compute cosine similarity and assign prototypes without tracking gradients
+        with torch.no_grad():
+            feats_detached = feats.detach()
+            cos_sim = torch.einsum('bhwd,cpd->bhwcp', feats_detached, self.proto_features)  # (B, H, W, NUM_CLASS, NUM_PROTO)
+            max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
+            proto_usage = (self.feat2proto_count.float() + 1).log().clamp(min=1.0)
+            cos_sim /= proto_usage[None, None, None, :, :]
+            max_sim_rect, max_proto_ids_rect = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
         
         for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
             heatmaps = target_dict['heatmaps'][idx]  # (B, num_classes, H, W)

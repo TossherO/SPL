@@ -66,9 +66,10 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         scaler.update()
         
         if hasattr(model, 'module'):
-            new_features = model.module.dense_head.new_features.detach()
+            new_features = model.module.dense_head.new_features
         else:
-            new_features = model.dense_head.new_features.detach()
+            new_features = model.dense_head.new_features
+        new_features = [feat.detach() for feat in new_features]
         new_features_gathered = commu_utils.all_gather(new_features)  # List of list of (num_new, feature_dim) tensors, len1 = world_size, len2 = num_class
 
         accumulated_iter += 1
@@ -87,7 +88,7 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
             # prototype update
             new_features_list = []
             for class_id in range(prototype_cfg.NUM_CLASS):
-                class_features = [new_features_gathered[i][class_id] for i in range(len(new_features_gathered)) if len(new_features_gathered[i][class_id]) > 0]
+                class_features = [new_features_gathered[i][class_id].cuda() for i in range(len(new_features_gathered)) if len(new_features_gathered[i][class_id]) > 0]
                 if len(class_features) > 0:
                     class_features = torch.concat(class_features, dim=0)
                 else:
