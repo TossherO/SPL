@@ -1,11 +1,7 @@
 CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
 
 DATA_CONFIG:
-    _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset.yaml
-    INFO_PATH: {
-        'train': [kitti_infos_train_sparse.pkl],
-        'test': [kitti_infos_val.pkl],
-    }
+    _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset_sparse.yaml
     
 MODEL:
     NAME: CenterPoint
@@ -57,6 +53,7 @@ MODEL:
             FEATURE_DIM: 64
             PROTO_FEATURE_THRESHOLD: 0.5
             PSEUDO_LABEL_THRESHOLD: 0.5
+            MAX_PROTO_UPDATE_NUM: 50
 
         TARGET_ASSIGNER_CONFIG:
             FEATURE_MAP_STRIDE: 4
@@ -116,3 +113,13 @@ OPTIMIZATION:
     WARMUP_EPOCH: 1
 
     GRAD_NORM_CLIP: 10
+
+
+HOOK:
+    DisableAugmentationHook:
+        DISABLE_AUG_LIST: ['gt_sampling']
+        NUM_LAST_EPOCHS: 10
+        
+    ChangePrototypeStageHook:
+        STAGE_LIST: [0, 1]
+        START_EPOCH_LIST: [0, 5]

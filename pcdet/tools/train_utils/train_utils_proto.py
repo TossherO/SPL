@@ -225,6 +225,7 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
                 cur_scheduler = lr_scheduler
             
             augment_disable_flag = disable_augmentation_hook(hook_config, dataloader_iter, total_epochs, cur_epoch, cfg, augment_disable_flag, logger)
+            change_prototype_stage_hook(hook_config, model, cur_epoch, logger)
             accumulated_iter = train_one_epoch_proto(
                 model, optimizer, train_loader, model_func,
                 lr_scheduler=cur_scheduler,
@@ -320,3 +321,22 @@ def disable_augmentation_hook(hook_config, dataloader, total_epochs, cur_epoch, 
                 dataloader._dataset.data_augmentor.disable_augmentation(dataset_cfg.DATA_AUGMENTOR)
                 flag = True
     return flag
+
+
+def change_prototype_stage_hook(hook_config, model, cur_epoch, logger):
+    """
+    This hook changes the prototype update stage during training.
+    """
+    if hook_config is not None:
+        ChangePrototypeStageHook = hook_config.get('ChangePrototypeStageHook', None)
+        if ChangePrototypeStageHook is not None:
+            STAGE_LIST = ChangePrototypeStageHook.STAGE_LIST
+            START_EPOCH_LIST = ChangePrototypeStageHook.START_EPOCH_LIST
+            for stage_idx in range(len(STAGE_LIST)):
+                if cur_epoch == START_EPOCH_LIST[stage_idx]:
+                    stage = STAGE_LIST[stage_idx]
+                    if hasattr(model, 'module'):
+                        model.module.dense_head.proto_stage = stage
+                    else:
+                        model.dense_head.proto_stage = stage
+                    logger.info(f'Change prototype update to stage {stage} at epoch {cur_epoch}.')

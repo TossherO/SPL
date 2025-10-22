@@ -122,6 +122,8 @@ class CenterHead_prototype(nn.Module):
         self.new_features_labels = None  # list of (N_c,), len = NUM_CLASS
         self.proto_feature_thre = self.prototype_cfg.PROTO_FEATURE_THRESHOLD
         self.pseudo_label_thre = self.prototype_cfg.PSEUDO_LABEL_THRESHOLD
+        self.max_proto_update_num = self.prototype_cfg.MAX_PROTO_UPDATE_NUM
+        self.proto_stage = 0
         nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
         self.refresh_new_features()
 
@@ -507,25 +509,29 @@ class CenterHead_prototype(nn.Module):
             heatmap_inds = torch.where(heatmaps > 0)  # (4, N) (B, class_id, y, x)
             max_sim[heatmap_inds[0], heatmap_inds[2], heatmap_inds[3], cur_class_ids[heatmap_inds[1]]] = 0
 
-        max_sim, max_class_ids = max_sim.max(dim=-1)  # (B, H, W)
+        if self.proto_stage > 0:
+            max_sim, max_class_ids = max_sim.max(dim=-1)  # (B, H, W)
 
-        # collect similar features for prototype updating
-        sim_mask = (max_sim > self.proto_feature_thre)
-        for class_id in range(self.prototype_cfg.NUM_CLASS):
-            class_mask = (max_class_ids == class_id) & sim_mask  # (B, H, W)
-            if class_mask.sum() == 0:
-                continue
-            class_feats = feats[class_mask]  # (N_c, D)
-            self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats], dim=0)
-            self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], max_proto_ids_rect[class_mask][:, class_id]], dim=0)
+            # collect similar features for prototype updating
+            sim_mask = (max_sim > self.proto_feature_thre)
+            for class_id in range(self.prototype_cfg.NUM_CLASS):
+                class_mask = (max_class_ids == class_id) & sim_mask  # (B, H, W)
+                if class_mask.sum() == 0:
+                    continue
+                class_feats = feats[class_mask]  # (N_c, D)
+                remain_num = self.max_proto_update_num - self.new_features[class_id].shape[0]
+                if remain_num > 0:
+                    sample_ids = torch.randperm(class_feats.shape[0])[:min(remain_num, class_feats.shape[0])]
+                    self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats[sample_ids]], dim=0)
+                    self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], max_proto_ids_rect[class_mask][:, class_id][sample_ids]], dim=0)
 
-        # collect pseudo-labeled features and refine heatmaps
-        pseudo_mask = (max_sim > self.pseudo_label_thre)
-        for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
-            pseudo_heatmap = torch.zeros_like(target_dict['heatmaps'][idx])  # (B, num_classes, H, W)
-            for i, class_id in enumerate(cur_class_ids):
-                class_mask = (max_class_ids == class_id) & pseudo_mask  # (B, H, W)
-                pseudo_heatmap[:, i, :, :][class_mask] = max_sim[:, :, :][class_mask]
-            target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
+            # collect pseudo-labeled features and refine heatmaps
+            pseudo_mask = (max_sim > self.pseudo_label_thre)
+            for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
+                pseudo_heatmap = torch.zeros_like(target_dict['heatmaps'][idx])  # (B, num_classes, H, W)
+                for i, class_id in enumerate(cur_class_ids):
+                    class_mask = (max_class_ids == class_id) & pseudo_mask  # (B, H, W)
+                    pseudo_heatmap[:, i, :, :][class_mask] = max_sim[:, :, :][class_mask]
+                target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
 
         return target_dict
