@@ -46,14 +46,15 @@ MODEL:
             }
 
         PROTOTYPE_CONFIG:
-            PATH: ../ckpts/prototype_features/centerpoint_kitti_prototype_features.pth
+            # PATH: ../ckpts/prototype_features/centerpoint_kitti_prototype_features.pth
             NUM_CLASS: 3
             NUM_PROTO: 10
-            BANK_SIZE: 100
+            BANK_SIZE: 500
             FEATURE_DIM: 64
-            PROTO_FEATURE_THRESHOLD: 0.8
-            PSEUDO_LABEL_THRESHOLD: 0.8
+            PROTO_FEATURE_THRESHOLD: 0.5
+            PSEUDO_LABEL_THRESHOLD: 0.5
             MAX_PROTO_UPDATE_NUM: 50
+            MOMENTUM: 0.9
 
         TARGET_ASSIGNER_CONFIG:
             FEATURE_MAP_STRIDE: 4
@@ -69,7 +70,7 @@ MODEL:
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
             }
         POST_PROCESSING:
-            SCORE_THRESH: 0.7
+            SCORE_THRESH: 0.1
             POST_CENTER_LIMIT_RANGE: [-75.2, -75.2, -2, 75.2, 75.2, 4]
             MAX_OBJ_PER_SAMPLE: 500
             NMS_CONFIG:

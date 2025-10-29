@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.init import kaiming_normal_
+from timm.models.layers import trunc_normal_
 from ..model_utils import model_nms_utils
 from ..model_utils import centernet_utils
 from ...utils import loss_utils
@@ -104,7 +105,8 @@ class CenterHead_prototype(nn.Module):
         self.prototype_cfg = self.model_cfg.get('PROTOTYPE_CONFIG', None)
         self.proto_features = nn.Parameter(torch.zeros(
             (self.prototype_cfg.NUM_CLASS, self.prototype_cfg.NUM_PROTO, self.prototype_cfg.FEATURE_DIM)).float(), requires_grad=False)
-        self.feat2proto_count = nn.Parameter(torch.zeros((self.prototype_cfg.NUM_CLASS, self.prototype_cfg.NUM_PROTO)).long(), requires_grad=False)
+        self.bank_labels = nn.Parameter(torch.zeros((
+            self.prototype_cfg.NUM_CLASS, self.prototype_cfg.BANK_SIZE)).long(), requires_grad=False)
         self.proto_proj = nn.Sequential(
             nn.Conv2d(
                 self.model_cfg.SHARED_CONV_CHANNEL, self.model_cfg.SHARED_CONV_CHANNEL, 3, stride=1, padding=1,
@@ -124,6 +126,7 @@ class CenterHead_prototype(nn.Module):
         self.pseudo_label_thre = self.prototype_cfg.PSEUDO_LABEL_THRESHOLD
         self.max_proto_update_num = self.prototype_cfg.MAX_PROTO_UPDATE_NUM
         self.proto_stage = 0
+        trunc_normal_(self.proto_features, std=0.02)
         nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
         self.refresh_new_features()
 
@@ -323,13 +326,9 @@ class CenterHead_prototype(nn.Module):
             if self.new_features[class_id].shape[0] == 0:
                 continue
             feats = self.new_features[class_id]  # (N_c, D)
-            labels = self.new_features_labels[class_id]  # (N_c,)
-            pos_protos = self.proto_features[class_id, labels, :]  # (N_c, D)
-            neg_protos = self.proto_features[torch.arange(self.prototype_cfg.NUM_CLASS) != class_id].view(-1, self.prototype_cfg.FEATURE_DIM)  # ((NUM_CLASS - 1) * NUM_PROTO, D)
-            protos = torch.cat([pos_protos.unsqueeze(1), neg_protos.unsqueeze(0).expand(feats.shape[0], -1, -1)], dim=1)  # (N_c, 1 + (NUM_CLASS - 1) * NUM_PROTO, D)
-            logits = logit_scale * (feats.unsqueeze(1) @ protos.permute(0, 2, 1)).squeeze(1)  # (N_c, 1 + (NUM_CLASS - 1) * NUM_PROTO)
-            labels_contrastive = torch.zeros_like(labels).long()  # (N_c,)
-            contrastive_loss = F.cross_entropy(logits, labels_contrastive)
+            labels = self.new_features_labels[class_id] + class_id * self.prototype_cfg.NUM_PROTO  # (N_c,)
+            logits = logit_scale * (feats @ self.proto_features[class_id].t())  # (N_c, NUM_PROTO)
+            contrastive_loss = F.cross_entropy(logits, labels)
             loss += contrastive_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['contrastive_weight'] / self.prototype_cfg.NUM_CLASS
             tb_dict['contrastive_loss_class_%d' % class_id] = contrastive_loss.item()
 
@@ -485,8 +484,14 @@ class CenterHead_prototype(nn.Module):
             feats_detached = feats.detach()
             cos_sim = torch.einsum('bhwd,cpd->bhwcp', feats_detached, self.proto_features)  # (B, H, W, NUM_CLASS, NUM_PROTO)
             max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
-            proto_usage = (self.feat2proto_count.float() + 1).log().clamp(min=1.0)
-            cos_sim /= proto_usage[None, None, None, :, :]
+            feat2proto_count = []
+            for class_id in range(self.prototype_cfg.NUM_CLASS):
+                feat2proto_count.append(torch.bincount(
+                    self.bank_labels[class_id], minlength=self.prototype_cfg.NUM_PROTO + 1
+                )[1:])  # (NUM_PROTO,)
+            feat2proto_count = torch.stack(feat2proto_count, dim=0) # (NUM_CLASS, NUM_PROTO)
+            proto_scale = (feat2proto_count.float() + 1).log().clamp(min=1.0) # (NUM_CLASS, NUM_PROTO)
+            cos_sim /= proto_scale[None, None, None, :, :]
             max_sim_rect, max_proto_ids_rect = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
         
         for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):

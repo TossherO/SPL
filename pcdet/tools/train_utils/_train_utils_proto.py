@@ -7,53 +7,14 @@ import glob
 import torch.distributed as dist
 from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils, commu_utils
-
-
-def prototype_update(proto_features, bank_labels, new_features_list, new_features_labels_list, prototype_cfg):
-    """
-    Update prototype features and feature bank with new features from the current batch.
-    Args:
-        proto_features: (num_class, num_proto, feature_dim) tensor
-        bank_labels: (num_class, bank_size) tensor
-        new_features_list: list of length num_class, each element is (num_new, feature_dim) tensor
-        new_features_labels_list: list of length num_class, each element is (num_new,) tensor
-        prototype_cfg: configuration for prototype update
-    Returns:
-        Updated proto_features and bank_labels
-    """
-    num_class = prototype_cfg.NUM_CLASS
-    num_proto = prototype_cfg.NUM_PROTO
-    momentum = prototype_cfg.MOMENTUM
-
-    for class_id in range(num_class):
-        new_features = new_features_list[class_id]  # (num_new, feature_dim)
-        new_labels = new_features_labels_list[class_id]  # (num_new,)
-
-        if new_features.shape[0] == 0:
-            continue
-
-        # Update prototype feature with momentum
-        for i in range(num_proto):
-            mask = (new_labels == i)
-            if torch.sum(mask) == 0:
-                continue
-            selected_features = new_features[mask]  # (num_selected, feature_dim)
-            mean_feature = torch.mean(selected_features, dim=0)  # (feature_dim,)
-            proto_feature = proto_features[class_id, i]  # (feature_dim,)
-            proto_features[class_id, i] = momentum * proto_feature + (1 - momentum) * mean_feature
-            proto_features[class_id, i] = proto_features[class_id, i] / torch.norm(proto_features[class_id, i], p=2)
-
-        # Update feature bank
-        bank_labels[class_id] = torch.cat((bank_labels[class_id], new_labels), dim=0)[-prototype_cfg.BANK_SIZE:]
-
-    return proto_features, bank_labels
+from pcdet.utils.prototype import load_prototype, save_prototype, prototype_update
 
 
 def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_scheduler, accumulated_iter, optim_cfg,
                     rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False, 
                     use_logger_to_record=False, logger=None, logger_iter_interval=50, cur_epoch=None, 
                     total_epochs=None, ckpt_save_dir=None, ckpt_save_time_interval=300, show_gpu_stat=False, use_amp=False, 
-                    prototype_cfg=None):
+                    prototype_cfg=None, save_inter_proto=False):
     if total_it_each_epoch == len(train_loader):
         dataloader_iter = iter(train_loader)
 
@@ -68,12 +29,7 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         batch_time = common_utils.AverageMeter()
         forward_time = common_utils.AverageMeter()
         losses_m = common_utils.AverageMeter()
-        if hasattr(model, 'module'):
-            proto_features = model.module.dense_head.proto_features
-            bank_labels = model.module.dense_head.bank_labels
-        else:
-            proto_features = model.dense_head.proto_features
-            bank_labels = model.dense_head.bank_labels
+        proto_features, feature_bank, feature_count = load_prototype(prototype_cfg)
 
     end = time.time()
     for cur_it in range(start_it, total_it_each_epoch):
@@ -111,14 +67,10 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         
         if hasattr(model, 'module'):
             new_features = model.module.dense_head.new_features
-            new_features_labels = model.module.dense_head.new_features_labels
         else:
             new_features = model.dense_head.new_features
-            new_features_labels = model.dense_head.new_features_labels
         new_features = [feat.detach() for feat in new_features]
-        new_features_labels = [label.detach() for label in new_features_labels]
         new_features_gathered = commu_utils.all_gather(new_features)  # List of list of (num_new, feature_dim) tensors, len1 = world_size, len2 = num_class
-        new_features_labels_gathered = commu_utils.all_gather(new_features_labels)  # List of list of (num_new,) tensors, len1 = world_size, len2 = num_class
 
         accumulated_iter += 1
  
@@ -135,21 +87,16 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         if rank == 0:
             # prototype update
             new_features_list = []
-            new_features_labels_list = []
             for class_id in range(prototype_cfg.NUM_CLASS):
                 class_features = [new_features_gathered[i][class_id].cuda() for i in range(len(new_features_gathered)) if len(new_features_gathered[i][class_id]) > 0]
-                class_labels = [new_features_labels_gathered[i][class_id].cuda() for i in range(len(new_features_labels_gathered)) if len(new_features_labels_gathered[i][class_id]) > 0]
                 if len(class_features) > 0:
                     class_features = torch.concat(class_features, dim=0)
-                    class_labels = torch.concat(class_labels, dim=0)
                 else:
                     class_features = torch.zeros((0, prototype_cfg.FEATURE_DIM)).float().cuda()
-                    class_labels = torch.zeros((0,), dtype=torch.long).cuda()
                 new_features_list.append(class_features)
-                new_features_labels_list.append(class_labels)
             with torch.no_grad():
-                proto_features, bank_labels = \
-                    prototype_update(proto_features, bank_labels, new_features_list, new_features_labels_list, prototype_cfg)
+                proto_features, feature_bank, feature_count, feat2proto_count = \
+                    prototype_update(proto_features, feature_bank, feature_count, new_features_list, prototype_cfg.NUM_PROTO)
 
             batch_size = batch.get('batch_size', None)
             
@@ -221,21 +168,28 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
 
         else:
             proto_features = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.NUM_PROTO, prototype_cfg.FEATURE_DIM)).float().cuda()
-            bank_labels = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.BANK_SIZE)).long().cuda()
+            feat2proto_count = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.NUM_PROTO)).long().cuda()
 
         dist.broadcast(proto_features, src=0)
-        dist.broadcast(bank_labels, src=0)
+        dist.broadcast(feat2proto_count, src=0)
+        mask = feat2proto_count.sum(dim=1) > 0
         if hasattr(model, 'module'):
             model.module.dense_head.proto_features.data = proto_features
-            model.module.dense_head.bank_labels.data = bank_labels
+            model.module.dense_head.feat2proto_count.data[mask] = feat2proto_count[mask]
             model.module.dense_head.refresh_new_features()
         else:
             model.dense_head.proto_features.data = proto_features
-            model.dense_head.bank_labels.data = bank_labels
+            model.dense_head.feat2proto_count.data[mask] = feat2proto_count[mask]
             model.dense_head.refresh_new_features()
         
     if rank == 0:
         pbar.close()
+        save_prototype(proto_features, feature_bank, feature_count, prototype_cfg)
+        if save_inter_proto:
+            save_path = prototype_cfg.get('PATH', None).replace('.pth', f'_epoch{cur_epoch+1}.pth')
+            save_prototype(proto_features, feature_bank, feature_count, prototype_cfg, save_path=save_path)
+            logger.info(f'Save intermediate prototype to {save_path}')
+
     return accumulated_iter
 
 
@@ -244,7 +198,7 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
                 lr_warmup_scheduler=None, ckpt_save_interval=1, max_ckpt_save_num=50,
                 merge_all_iters_to_one_epoch=False, use_amp=False,
                 use_logger_to_record=False, logger=None, logger_iter_interval=None, ckpt_save_time_interval=None, show_gpu_stat=False, 
-                cfg=None):
+                cfg=None, save_inter_proto=False):
     accumulated_iter = start_iter
 
     # use for disable data augmentation hook
@@ -287,7 +241,8 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
                 ckpt_save_dir=ckpt_save_dir, ckpt_save_time_interval=ckpt_save_time_interval, 
                 show_gpu_stat=show_gpu_stat,
                 use_amp=use_amp,
-                prototype_cfg=prototype_cfg
+                prototype_cfg=prototype_cfg,
+                save_inter_proto=save_inter_proto
             )
 
             # save trained model
