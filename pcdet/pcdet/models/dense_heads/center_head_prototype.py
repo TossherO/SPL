@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.init import kaiming_normal_
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 from ..model_utils import model_nms_utils
 from ..model_utils import centernet_utils
 from ...utils import loss_utils
@@ -120,13 +120,14 @@ class CenterHead_prototype(nn.Module):
             ),
         )
         self.logit_scale = nn.Parameter(torch.ones([]))
-        self.new_features = None  # list of (N_c, D), len = NUM_CLASS
+        self.memory_features = [torch.zeros((0, self.prototype_cfg.FEATURE_DIM)).float().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
+        self.new_features = None  # list of (M_c, D), len = NUM_CLASS
         self.new_features_labels = None  # list of (N_c,), len = NUM_CLASS
         self.proto_feature_thre = self.prototype_cfg.PROTO_FEATURE_THRESHOLD
         self.pseudo_label_thre = self.prototype_cfg.PSEUDO_LABEL_THRESHOLD
         self.max_proto_update_num = self.prototype_cfg.MAX_PROTO_UPDATE_NUM
         self.proto_stage = 0
-        trunc_normal_(self.proto_features, std=0.02)
+        # trunc_normal_(self.proto_features, std=0.02)
         nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
         self.refresh_new_features()
 
@@ -326,9 +327,25 @@ class CenterHead_prototype(nn.Module):
             if self.new_features[class_id].shape[0] == 0:
                 continue
             feats = self.new_features[class_id]  # (N_c, D)
-            labels = self.new_features_labels[class_id] + class_id * self.prototype_cfg.NUM_PROTO  # (N_c,)
-            logits = logit_scale * (feats @ self.proto_features[class_id].t())  # (N_c, NUM_PROTO)
-            contrastive_loss = F.cross_entropy(logits, labels)
+
+            if self.proto_stage > 0:
+                labels = self.new_features_labels[class_id] + class_id * self.prototype_cfg.NUM_PROTO  # (N_c,)
+                logits = logit_scale * (feats @ self.proto_features.view(-1, self.prototype_cfg.FEATURE_DIM).t())  # (N_c, NUM_CLASS * NUM_PROTO)
+                contrastive_loss = F.cross_entropy(logits, labels)
+            else:
+                if self.memory_features[class_id].shape[0] == 0:
+                    continue
+                pos_features = self.memory_features[class_id]  # (M_c, D)
+                pos_logits = logit_scale * (feats @ pos_features.t())  # (N_c, M_c)
+                max_pos_logit, _ = pos_logits.max(dim=1)  # (N_c,)
+                neg_features = torch.cat([
+                    self.memory_features[cid] for cid in range(self.prototype_cfg.NUM_CLASS) if cid != class_id
+                ], dim=0)  # (sum(M_not_c), D)
+                neg_logits = logit_scale * (feats @ neg_features.t())  # (N_c, sum(M_not_c))
+                logits = logit_scale * torch.cat([max_pos_logit.unsqueeze(1), neg_logits], dim=1)  # (N_c, 1 + sum(M_not_c))
+                labels = torch.zeros((feats.shape[0],), dtype=torch.long).cuda()  # (N_c,)
+                contrastive_loss = F.cross_entropy(logits, labels)
+                
             loss += contrastive_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['contrastive_weight'] / self.prototype_cfg.NUM_CLASS
             tb_dict['contrastive_loss_class_%d' % class_id] = contrastive_loss.item()
 
@@ -480,19 +497,20 @@ class CenterHead_prototype(nn.Module):
         feats = F.normalize(feats, p=2, dim=-1)
 
         # compute cosine similarity and assign prototypes without tracking gradients
-        with torch.no_grad():
-            feats_detached = feats.detach()
-            cos_sim = torch.einsum('bhwd,cpd->bhwcp', feats_detached, self.proto_features)  # (B, H, W, NUM_CLASS, NUM_PROTO)
-            max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
-            feat2proto_count = []
-            for class_id in range(self.prototype_cfg.NUM_CLASS):
-                feat2proto_count.append(torch.bincount(
-                    self.bank_labels[class_id], minlength=self.prototype_cfg.NUM_PROTO + 1
-                )[1:])  # (NUM_PROTO,)
-            feat2proto_count = torch.stack(feat2proto_count, dim=0) # (NUM_CLASS, NUM_PROTO)
-            proto_scale = (feat2proto_count.float() + 1).log().clamp(min=1.0) # (NUM_CLASS, NUM_PROTO)
-            cos_sim /= proto_scale[None, None, None, :, :]
-            max_sim_rect, max_proto_ids_rect = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
+        if self.proto_stage > 0:
+            with torch.no_grad():
+                feats_detached = feats.detach()
+                cos_sim = torch.einsum('bhwd,cpd->bhwcp', feats_detached, self.proto_features)  # (B, H, W, NUM_CLASS, NUM_PROTO)
+                max_sim, max_proto_ids = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
+                feat2proto_count = []
+                for class_id in range(self.prototype_cfg.NUM_CLASS):
+                    feat2proto_count.append(torch.bincount(
+                        self.bank_labels[class_id], minlength=self.prototype_cfg.NUM_PROTO + 1
+                    )[1:])  # (NUM_PROTO,)
+                feat2proto_count = torch.stack(feat2proto_count, dim=0) # (NUM_CLASS, NUM_PROTO)
+                proto_scale = (feat2proto_count.float() + 1).log().clamp(min=1.0) # (NUM_CLASS, NUM_PROTO)
+                cos_sim /= proto_scale[None, None, None, :, :]
+                max_sim_rect, max_proto_ids_rect = cos_sim.max(dim=-1)  # (B, H, W, NUM_CLASS)
         
         for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
             heatmaps = target_dict['heatmaps'][idx]  # (B, num_classes, H, W)
@@ -501,20 +519,23 @@ class CenterHead_prototype(nn.Module):
             gt_inds = torch.where(heatmaps == 1)  # (4, M) (B, class_id, y, x)
             gt_feats = feats[gt_inds[0], gt_inds[2], gt_inds[3], :]  # (M, D)
             gt_class_ids = cur_class_ids[gt_inds[1]]  # (M,)
-            gt_proto_ids = max_proto_ids_rect[gt_inds[0], gt_inds[2], gt_inds[3], gt_class_ids]  # (M,)
+            if self.proto_stage > 0:
+                gt_proto_ids = max_proto_ids_rect[gt_inds[0], gt_inds[2], gt_inds[3], gt_class_ids]  # (M,)
             for class_id in cur_class_ids:
                 class_mask = (gt_class_ids == class_id)
                 if class_mask.sum() == 0:
                     continue
                 class_feats = gt_feats[class_mask]  # (N_c, D)
                 self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats], dim=0)
-                self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], gt_proto_ids[class_mask]], dim=0)
+                if self.proto_stage > 0:
+                    self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], gt_proto_ids[class_mask]], dim=0)
 
             # remove gt positions from max_sim to avoid duplicate counting
-            heatmap_inds = torch.where(heatmaps > 0)  # (4, N) (B, class_id, y, x)
-            max_sim[heatmap_inds[0], heatmap_inds[2], heatmap_inds[3], cur_class_ids[heatmap_inds[1]]] = 0
+            if self.proto_stage > 0:
+                heatmap_inds = torch.where(heatmaps > 0)  # (4, N) (B, class_id, y, x)
+                max_sim[heatmap_inds[0], heatmap_inds[2], heatmap_inds[3], cur_class_ids[heatmap_inds[1]]] = 0
 
-        if self.proto_stage > 0:
+        if self.proto_stage > 1:
             max_sim, max_class_ids = max_sim.max(dim=-1)  # (B, H, W)
 
             # collect similar features for prototype updating

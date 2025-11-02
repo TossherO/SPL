@@ -7,6 +7,7 @@ import glob
 import torch.distributed as dist
 from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils, commu_utils
+from pcdet.utils.kmeans import kmeans
 
 
 def prototype_update(proto_features, bank_labels, new_features_list, new_features_labels_list, prototype_cfg):
@@ -44,7 +45,7 @@ def prototype_update(proto_features, bank_labels, new_features_list, new_feature
             proto_features[class_id, i] = proto_features[class_id, i] / torch.norm(proto_features[class_id, i], p=2)
 
         # Update feature bank
-        bank_labels[class_id] = torch.cat((bank_labels[class_id], new_labels), dim=0)[-prototype_cfg.BANK_SIZE:]
+        bank_labels[class_id] = torch.cat((bank_labels[class_id], new_labels + 1), dim=0)[-prototype_cfg.BANK_SIZE:]
 
     return proto_features, bank_labels
 
@@ -53,7 +54,7 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
                     rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False, 
                     use_logger_to_record=False, logger=None, logger_iter_interval=50, cur_epoch=None, 
                     total_epochs=None, ckpt_save_dir=None, ckpt_save_time_interval=300, show_gpu_stat=False, use_amp=False, 
-                    prototype_cfg=None):
+                    prototype_cfg=None, proto_stage=0):
     if total_it_each_epoch == len(train_loader):
         dataloader_iter = iter(train_loader)
 
@@ -68,12 +69,21 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         batch_time = common_utils.AverageMeter()
         forward_time = common_utils.AverageMeter()
         losses_m = common_utils.AverageMeter()
+
         if hasattr(model, 'module'):
-            proto_features = model.module.dense_head.proto_features
+            memory_features = model.module.dense_head.memory_features.data
+            proto_features = model.module.dense_head.proto_features.data
             bank_labels = model.module.dense_head.bank_labels
         else:
-            proto_features = model.dense_head.proto_features
+            memory_features = model.dense_head.memory_features.data
+            proto_features = model.dense_head.proto_features.data
             bank_labels = model.dense_head.bank_labels
+        # initialize prototype features 
+        if proto_stage > 0 and (bank_labels > 0).sum() == 0:
+            for class_id in range(prototype_cfg.NUM_CLASS):
+                assert len(memory_features[class_id]) >= prototype_cfg.NUM_PROTO, \
+                    f'Not enough memory features for class {class_id} to initialize prototypes.'
+                _, proto_features[class_id] = kmeans(memory_features[class_id], prototype_cfg.NUM_PROTO, distance='cosine', norm=False)
 
     end = time.time()
     for cur_it in range(start_it, total_it_each_epoch):
@@ -133,7 +143,6 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
 
         # log to console and tensorboard
         if rank == 0:
-            # prototype update
             new_features_list = []
             new_features_labels_list = []
             for class_id in range(prototype_cfg.NUM_CLASS):
@@ -147,9 +156,24 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
                     class_labels = torch.zeros((0,), dtype=torch.long).cuda()
                 new_features_list.append(class_features)
                 new_features_labels_list.append(class_labels)
+
             with torch.no_grad():
-                proto_features, bank_labels = \
-                    prototype_update(proto_features, bank_labels, new_features_list, new_features_labels_list, prototype_cfg)
+                # memory update
+                if proto_stage == 0:
+                    new_memory_features = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.MEMORY_SIZE, prototype_cfg.FEATURE_DIM)).float().cuda()
+                    memory_feature_counts = torch.zeros((prototype_cfg.NUM_CLASS,), dtype=torch.long).cuda()
+                    for class_id in range(prototype_cfg.NUM_CLASS):
+                        class_memory_features = torch.cat((memory_features[class_id], new_features_list[class_id]), dim=0)
+                        if class_memory_features.shape[0] < prototype_cfg.MEMORY_SIZE:
+                            new_memory_features[class_id, :class_memory_features.shape[0]] = class_memory_features
+                            memory_feature_counts[class_id] = class_memory_features.shape[0]
+                        else:
+                            new_memory_features[class_id] = class_memory_features[-prototype_cfg.MEMORY_SIZE:]
+                            memory_feature_counts[class_id] = prototype_cfg.MEMORY_SIZE
+                # prototype update
+                else:
+                    proto_features, bank_labels = \
+                        prototype_update(proto_features, bank_labels, new_features_list, new_features_labels_list, prototype_cfg)
 
             batch_size = batch.get('batch_size', None)
             
@@ -220,19 +244,36 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
                 ckpt_save_cnt += 1
 
         else:
-            proto_features = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.NUM_PROTO, prototype_cfg.FEATURE_DIM)).float().cuda()
-            bank_labels = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.BANK_SIZE)).long().cuda()
+            if proto_stage == 0:
+                new_memory_features = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.MEMORY_SIZE, prototype_cfg.FEATURE_DIM)).float().cuda()
+                memory_feature_counts = torch.zeros((prototype_cfg.NUM_CLASS,), dtype=torch.long).cuda()
+            else:
+                proto_features = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.NUM_PROTO, prototype_cfg.FEATURE_DIM)).float().cuda()
+                bank_labels = torch.zeros((prototype_cfg.NUM_CLASS, prototype_cfg.BANK_SIZE)).long().cuda()
 
-        dist.broadcast(proto_features, src=0)
-        dist.broadcast(bank_labels, src=0)
-        if hasattr(model, 'module'):
-            model.module.dense_head.proto_features.data = proto_features
-            model.module.dense_head.bank_labels.data = bank_labels
-            model.module.dense_head.refresh_new_features()
+        if proto_stage == 0:
+            dist.broadcast(new_memory_features, src=0)
+            dist.broadcast(memory_feature_counts, src=0)
+            memory_features = []
+            for class_id in range(prototype_cfg.NUM_CLASS):
+                memory_features.append(new_memory_features[class_id, :memory_feature_counts[class_id]])
+            if hasattr(model, 'module'):
+                model.module.dense_head.memory_features = memory_features
+                model.module.dense_head.refresh_new_features()
+            else:
+                model.dense_head.memory_features = memory_features
+                model.dense_head.refresh_new_features()
         else:
-            model.dense_head.proto_features.data = proto_features
-            model.dense_head.bank_labels.data = bank_labels
-            model.dense_head.refresh_new_features()
+            dist.broadcast(proto_features, src=0)
+            dist.broadcast(bank_labels, src=0)
+            if hasattr(model, 'module'):
+                model.module.dense_head.proto_features.data = proto_features
+                model.module.dense_head.bank_labels.data = bank_labels
+                model.module.dense_head.refresh_new_features()
+            else:
+                model.dense_head.proto_features.data = proto_features
+                model.dense_head.bank_labels.data = bank_labels
+                model.dense_head.refresh_new_features()
         
     if rank == 0:
         pbar.close()
@@ -251,6 +292,7 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
     hook_config = cfg.get('HOOK', None) 
     prototype_cfg = cfg.MODEL.DENSE_HEAD.PROTOTYPE_CONFIG
     augment_disable_flag = False
+    cur_stage = 0
 
     with tqdm.trange(start_epoch, total_epochs, desc='epochs', dynamic_ncols=True, leave=(rank == 0)) as tbar:
         total_it_each_epoch = len(train_loader)
@@ -271,7 +313,7 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
                 cur_scheduler = lr_scheduler
             
             augment_disable_flag = disable_augmentation_hook(hook_config, dataloader_iter, total_epochs, cur_epoch, cfg, augment_disable_flag, logger)
-            change_prototype_stage_hook(hook_config, model, cur_epoch, logger)
+            cur_stage = change_prototype_stage_hook(hook_config, model, cur_epoch, cur_stage, logger)
             accumulated_iter = train_one_epoch_proto(
                 model, optimizer, train_loader, model_func,
                 lr_scheduler=cur_scheduler,
@@ -287,7 +329,8 @@ def train_model_proto(model, optimizer, train_loader, model_func, lr_scheduler, 
                 ckpt_save_dir=ckpt_save_dir, ckpt_save_time_interval=ckpt_save_time_interval, 
                 show_gpu_stat=show_gpu_stat,
                 use_amp=use_amp,
-                prototype_cfg=prototype_cfg
+                prototype_cfg=prototype_cfg,
+                proto_stage=cur_stage
             )
 
             # save trained model
@@ -368,7 +411,7 @@ def disable_augmentation_hook(hook_config, dataloader, total_epochs, cur_epoch, 
     return flag
 
 
-def change_prototype_stage_hook(hook_config, model, cur_epoch, logger):
+def change_prototype_stage_hook(hook_config, model, cur_epoch, cur_stage, logger):
     """
     This hook changes the prototype update stage during training.
     """
@@ -385,3 +428,5 @@ def change_prototype_stage_hook(hook_config, model, cur_epoch, logger):
                     else:
                         model.dense_head.proto_stage = stage
                     logger.info(f'Change prototype update to stage {stage} at epoch {cur_epoch}.')
+                    cur_stage = stage
+    return cur_stage

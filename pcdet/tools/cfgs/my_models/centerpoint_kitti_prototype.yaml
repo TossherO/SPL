@@ -50,9 +50,10 @@ MODEL:
             NUM_CLASS: 3
             NUM_PROTO: 10
             BANK_SIZE: 500
+            MEMORY_SIZE: 1000
             FEATURE_DIM: 64
             PROTO_FEATURE_THRESHOLD: 0.5
-            PSEUDO_LABEL_THRESHOLD: 0.5
+            PSEUDO_LABEL_THRESHOLD: 0.7
             MAX_PROTO_UPDATE_NUM: 50
             MOMENTUM: 0.9
 
@@ -117,10 +118,10 @@ OPTIMIZATION:
 
 
 HOOK:
-    # DisableAugmentationHook:
-    #     DISABLE_AUG_LIST: ['gt_sampling']
-    #     NUM_LAST_EPOCHS: 10
+    DisableAugmentationHook:
+        DISABLE_AUG_LIST: ['gt_sampling']
+        NUM_LAST_EPOCHS: 10
         
     ChangePrototypeStageHook:
-        STAGE_LIST: [0, 1]
-        START_EPOCH_LIST: [0, 5]
+        STAGE_LIST: [0, 1, 2]
+        START_EPOCH_LIST: [0, 5, 10]
