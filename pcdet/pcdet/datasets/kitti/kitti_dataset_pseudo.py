@@ -503,16 +503,16 @@ class KittiDataset_pseudo(DatasetTemplate):
             gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
             gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
             data_dict['gt_boxes'] = gt_boxes
-            
+            if data_dict.get('gt_boxes2d', None) is not None:
+                data_dict['gt_boxes2d'] = data_dict['gt_boxes2d'][selected]
+
+        if data_dict.get('pseudo_boxes', None) is not None:
             selected = common_utils.keep_arrays_by_name(data_dict['pseudo_names'], self.class_names)
             data_dict['pseudo_boxes'] = data_dict['pseudo_boxes'][selected]
             data_dict['pseudo_names'] = data_dict['pseudo_names'][selected]
             pseudo_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['pseudo_names']], dtype=np.int32)
             pseudo_boxes = np.concatenate((data_dict['pseudo_boxes'], pseudo_classes.reshape(-1, 1).astype(np.float32)), axis=1)
             data_dict['pseudo_boxes'] = pseudo_boxes
-
-            if data_dict.get('gt_boxes2d', None) is not None:
-                data_dict['gt_boxes2d'] = data_dict['gt_boxes2d'][selected]
 
         if data_dict.get('points', None) is not None:
             data_dict = self.point_feature_encoder.forward(data_dict)
@@ -526,6 +526,11 @@ class KittiDataset_pseudo(DatasetTemplate):
             return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
+
+        if data_dict.get('pseudo_boxes', None) is not None:
+            data_dict.pop('pseudo_names', None)
+        else:
+            data_dict['pseudo_boxes'] = np.zeros((0, 8), dtype=np.float32)
 
         return data_dict
 
