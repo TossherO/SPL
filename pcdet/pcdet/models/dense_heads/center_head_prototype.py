@@ -334,6 +334,7 @@ class CenterHead_prototype(nn.Module):
                 contrastive_loss = F.cross_entropy(logits, labels)
             else:
                 if self.memory_features[class_id].shape[0] == 0:
+                    loss += (feats * 0.).sum() * logit_scale
                     continue
                 pos_features = self.memory_features[class_id]  # (M_c, D)
                 pos_logits = logit_scale * (feats @ pos_features.t())  # (N_c, M_c)
@@ -453,7 +454,10 @@ class CenterHead_prototype(nn.Module):
                 data_dict['gt_boxes'], feature_map_size=spatial_features_2d.size()[2:],
                 feature_map_stride=data_dict.get('spatial_features_2d_strides', None)
             )
-            target_dict = self.prototype_learning(x, target_dict)
+            pseudo_heatmap_limit = self.get_preprocess_pseudo_targets(
+                data_dict['pseudo_boxes'], feature_map_size=spatial_features_2d.size()[2:]
+            )  # (B, NUM_CLASS, H, W)
+            target_dict = self.prototype_learning(x, target_dict, pseudo_heatmap_limit)
             self.forward_ret_dict['target_dicts'] = target_dict
 
         self.forward_ret_dict['pred_dicts'] = pred_dicts
@@ -478,7 +482,57 @@ class CenterHead_prototype(nn.Module):
         self.new_features = [torch.zeros((0, self.prototype_cfg.FEATURE_DIM)).float().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
         self.new_features_labels = [torch.zeros((0,)).long().cuda() for _ in range(self.prototype_cfg.NUM_CLASS)]
 
-    def prototype_learning(self, x, target_dict):
+    def get_preprocess_pseudo_targets(self, pseudo_boxes, feature_map_size,
+                                       gaussian_overlap=0.1, min_radius=2):
+        """
+        Args:
+            pseudo_boxes: list of (B, M, 9)
+            feature_map_size: (2) [H, W]
+        Returns:
+            pre_pseudo_masks: (B, NUM_CLASS, H, W)
+        """
+        batch_size = pseudo_boxes.shape[0]
+        pseudo_heatmap_limit = torch.zeros(
+            (batch_size, self.prototype_cfg.NUM_CLASS, feature_map_size[0], feature_map_size[1])
+        ).bool().cuda()
+        cls_ids = (pseudo_boxes[:, :, -1] - 1).long()
+
+        x, y, z = pseudo_boxes[:, :, 0], pseudo_boxes[:, :, 1], pseudo_boxes[:, :, 2]
+        coord_x = (x - self.point_cloud_range[0]) / self.voxel_size[0] / self.feature_map_stride
+        coord_y = (y - self.point_cloud_range[1]) / self.voxel_size[1] / self.feature_map_stride
+        coord_x = torch.clamp(coord_x, min=0, max=feature_map_size[1] - 0.5)
+        coord_y = torch.clamp(coord_y, min=0, max=feature_map_size[0] - 0.5)
+        center = torch.cat((coord_x[:, :, None], coord_y[:, :, None]), dim=-1)
+        # center_int = center.int()
+
+        dx, dy, dz = pseudo_boxes[:, :, 3], pseudo_boxes[:, :, 4], pseudo_boxes[:, :, 5]
+        is_bbox3d = dx > 0
+        invalid_car = ~is_bbox3d & (cls_ids == self.class_names.index('Car'))
+        dx[invalid_car], dy[invalid_car] = 2.0, 1.0
+        invalid_ped = ~is_bbox3d & (cls_ids == self.class_names.index('Pedestrian'))
+        dx[invalid_ped], dy[invalid_ped] = 0.6, 0.4
+        invalid_cyc = ~is_bbox3d & (cls_ids == self.class_names.index('Cyclist'))
+        dx[invalid_cyc], dy[invalid_cyc] = 1.0, 0.4
+        dx = dx / self.voxel_size[0] / self.feature_map_stride
+        dy = dy / self.voxel_size[1] / self.feature_map_stride
+
+        radius = centernet_utils.gaussian_radius(dx, dy, min_overlap=gaussian_overlap)
+        radius = torch.clamp_min(radius.int(), min=min_radius)
+
+        for bs_idx in range(batch_size):
+            for obj_idx in range(pseudo_boxes.shape[1]):
+                cur_class_id = cls_ids[bs_idx, obj_idx]
+                if cur_class_id < 0 or cur_class_id >= self.prototype_cfg.NUM_CLASS:
+                    continue
+                centernet_utils.draw_gaussian_to_heatmap(
+                    pseudo_heatmap_limit[bs_idx, cur_class_id],
+                    center[bs_idx, obj_idx], radius[bs_idx, obj_idx].item()
+                )
+            
+        return pseudo_heatmap_limit
+
+
+    def prototype_learning(self, x, target_dict, pseudo_heatmap_limit):
         """
         Args:
             x: (B, D, H, W)
@@ -488,7 +542,7 @@ class CenterHead_prototype(nn.Module):
                 'inds': list of (B, M)
                 'masks': list of (B, M)
                 'target_boxes_src': list of (B, M, 9)
-
+            pseudo_heatmap_limit: (B, NUM_CLASS, H, W)
         Returns:
 
         """
@@ -529,6 +583,8 @@ class CenterHead_prototype(nn.Module):
                 self.new_features[class_id] = torch.cat([self.new_features[class_id], class_feats], dim=0)
                 if self.proto_stage > 0:
                     self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], gt_proto_ids[class_mask]], dim=0)
+                else:
+                    self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], torch.zeros_like(class_feats[:, 0]).long()], dim=0)
 
             # remove gt positions from max_sim to avoid duplicate counting
             if self.proto_stage > 0:
@@ -541,7 +597,7 @@ class CenterHead_prototype(nn.Module):
             # collect similar features for prototype updating
             sim_mask = (max_sim > self.proto_feature_thre)
             for class_id in range(self.prototype_cfg.NUM_CLASS):
-                class_mask = (max_class_ids == class_id) & sim_mask  # (B, H, W)
+                class_mask = (max_class_ids == class_id) & sim_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
                 if class_mask.sum() == 0:
                     continue
                 class_feats = feats[class_mask]  # (N_c, D)
@@ -556,8 +612,8 @@ class CenterHead_prototype(nn.Module):
             for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
                 pseudo_heatmap = torch.zeros_like(target_dict['heatmaps'][idx])  # (B, num_classes, H, W)
                 for i, class_id in enumerate(cur_class_ids):
-                    class_mask = (max_class_ids == class_id) & pseudo_mask  # (B, H, W)
-                    pseudo_heatmap[:, i, :, :][class_mask] = max_sim[:, :, :][class_mask]
+                    class_mask = (max_class_ids == class_id) & pseudo_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
+                    pseudo_heatmap[:, i, :, :][class_mask] = torch.min(max_sim[:, :, :][class_mask], pseudo_heatmap_limit[:, class_id, :, :][class_mask])
                 target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
 
         return target_dict

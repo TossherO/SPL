@@ -90,6 +90,13 @@ class DataProcessor(object):
                 use_center_to_filter=config.get('USE_CENTER_TO_FILTER', True)
             )
             data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
+
+        if data_dict.get('pseudo_boxes', None) is not None and config.REMOVE_OUTSIDE_BOXES and self.training:
+            mask = box_utils.mask_boxes_outside_range_numpy(
+                data_dict['pseudo_boxes'], self.point_cloud_range, min_num_corners=config.get('min_num_corners', 1), 
+                use_center_to_filter=config.get('USE_CENTER_TO_FILTER', True)
+            )
+            data_dict['pseudo_boxes'] = data_dict['pseudo_boxes'][mask]
         return data_dict
 
     def shuffle_points(self, data_dict=None, config=None):

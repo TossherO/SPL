@@ -52,8 +52,8 @@ MODEL:
             BANK_SIZE: 500
             MEMORY_SIZE: 1000
             FEATURE_DIM: 64
-            PROTO_FEATURE_THRESHOLD: 0.5
-            PSEUDO_LABEL_THRESHOLD: 0.7
+            PROTO_FEATURE_THRESHOLD: 0.7
+            PSEUDO_LABEL_THRESHOLD: 0.5
             MAX_PROTO_UPDATE_NUM: 50
             MOMENTUM: 0.9
 

@@ -333,12 +333,12 @@ def process_stream(stream_results):
                 })
 
     class_map = {
-        'car': 'car',
-        'motorcycle': 'cyclist',
-        'bicycle': 'cyclist',
-        'person': 'pedestrian'
+        'car': 'Car',
+        'motorcycle': 'Cyclist',
+        'bicycle': 'Cyclist',
+        'person': 'Pedestrian'
     }
-    instance_counts = {'car': 0, 'pedestrian': 0, 'cyclist': 0}
+    instance_counts = {'Car': 0, 'Pedestrian': 0, 'Cyclist': 0}
 
     for instance_token in instance_token_list:
         instance = instances[instance_token]
@@ -366,7 +366,7 @@ def process_stream(stream_results):
                 vel_list.append(rot_list[i + 1].T @ v)
             vel_list.append(rot_list[-1].T @ d_list[-1] / dt_list[-1])
 
-        if label == 'car':
+        if label == 'Car':
             max_lwh = [0, 0, 0]
             for i, data in enumerate(instance['data_list']):
                 data['vel_3d'] = vel_list[i]
@@ -386,7 +386,7 @@ def process_stream(stream_results):
                 for data in instance['data_list']:
                     data['max_lwh'] = max_lwh
 
-        elif label == 'pedestrian':
+        elif label == 'Pedestrian':
             for i, data in enumerate(instance['data_list']):
                 data['vel_3d'] = vel_list[i]
                 if data['bbox_3d'] is not None:
