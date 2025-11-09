@@ -117,7 +117,7 @@ class DataAugmentor_pseudo(object):
                 data_dict['gt_boxes'], data_dict['points'], config['WORLD_SCALE_RANGE'], return_scale=True
             )
         if 'pseudo_boxes' in data_dict.keys():
-            data_dict['pseudo_boxes'] = data_dict['pseudo_boxes'][:, :6] * noise_scale
+            data_dict['pseudo_boxes'][:, :6] *= noise_scale
 
         data_dict['gt_boxes'] = gt_boxes
         data_dict['points'] = points

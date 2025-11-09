@@ -54,6 +54,7 @@ MODEL:
             FEATURE_DIM: 64
             PROTO_FEATURE_THRESHOLD: 0.7
             PSEUDO_LABEL_THRESHOLD: 0.5
+            PSEUDO_LABEL_THRESHOLD_HIGH: 0.8
             MAX_PROTO_UPDATE_NUM: 50
             MOMENTUM: 0.9
 
@@ -67,7 +68,8 @@ MODEL:
             LOSS_WEIGHTS: {
                 'cls_weight': 1.0,
                 'loc_weight': 2.0,
-                'contrastive_weight': 1.0,
+                'contrastive_intra_weight': 0.5,
+                'contrastive_inter_weight': 1.0,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
             }
         POST_PROCESSING:
