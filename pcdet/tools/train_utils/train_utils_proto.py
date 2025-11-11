@@ -71,13 +71,13 @@ def train_one_epoch_proto(model, optimizer, train_loader, model_func, lr_schedul
         losses_m = common_utils.AverageMeter()
 
         if hasattr(model, 'module'):
-            memory_features = model.module.dense_head.memory_features.data
             proto_features = model.module.dense_head.proto_features.data
-            bank_labels = model.module.dense_head.bank_labels
+            bank_labels = model.module.dense_head.bank_labels.data
+            memory_features = model.module.dense_head.memory_features
         else:
-            memory_features = model.dense_head.memory_features.data
             proto_features = model.dense_head.proto_features.data
-            bank_labels = model.dense_head.bank_labels
+            bank_labels = model.dense_head.bank_labels.data
+            memory_features = model.dense_head.memory_features
         # initialize prototype features 
         if proto_stage > 0 and (bank_labels > 0).sum() == 0:
             for class_id in range(prototype_cfg.NUM_CLASS):

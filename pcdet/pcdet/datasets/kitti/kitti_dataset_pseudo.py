@@ -433,7 +433,10 @@ class KittiDataset_pseudo(DatasetTemplate):
             pseudo_annos = info['pseudo_annos']
             input_dict.update({
                 'pseudo_names': pseudo_annos['name'],
-                'pseudo_boxes': pseudo_annos['bbox_3d']
+                'pseudo_boxes': pseudo_annos['bbox_3d'],
+                'pseudo_scores': pseudo_annos['score'],
+                'pseudo_dynamic': pseudo_annos['dynamic'],
+                'pseudo_ref_sizes': pseudo_annos['ref_size']
             })
 
         if "points" in get_item_list:
@@ -510,8 +513,15 @@ class KittiDataset_pseudo(DatasetTemplate):
             selected = common_utils.keep_arrays_by_name(data_dict['pseudo_names'], self.class_names)
             data_dict['pseudo_boxes'] = data_dict['pseudo_boxes'][selected]
             data_dict['pseudo_names'] = data_dict['pseudo_names'][selected]
+            data_dict['pseudo_scores'] = data_dict['pseudo_scores'][selected]
+            data_dict['pseudo_dynamic'] = data_dict['pseudo_dynamic'][selected]
+            data_dict['pseudo_ref_sizes'] = data_dict['pseudo_ref_sizes'][selected]
+            if data_dict.get('noise_scale', None) is not None:
+                data_dict['pseudo_ref_sizes'] *= data_dict['noise_scale']
             pseudo_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['pseudo_names']], dtype=np.int32)
-            pseudo_boxes = np.concatenate((data_dict['pseudo_boxes'], pseudo_classes.reshape(-1, 1).astype(np.float32)), axis=1)
+            pseudo_boxes = np.concatenate((data_dict['pseudo_boxes'], pseudo_classes.reshape(-1, 1).astype(np.float32), 
+                            data_dict['pseudo_scores'].reshape(-1, 1).astype(np.float32), 
+                            data_dict['pseudo_dynamic'].reshape(-1, 1).astype(np.float32), data_dict['pseudo_ref_sizes']), axis=1)
             data_dict['pseudo_boxes'] = pseudo_boxes
 
         if data_dict.get('points', None) is not None:
@@ -529,8 +539,11 @@ class KittiDataset_pseudo(DatasetTemplate):
 
         if data_dict.get('pseudo_boxes', None) is not None:
             data_dict.pop('pseudo_names', None)
+            data_dict.pop('pseudo_scores', None)
+            data_dict.pop('pseudo_dynamic', None)
+            data_dict.pop('pseudo_ref_sizes', None)
         else:
-            data_dict['pseudo_boxes'] = np.zeros((0, 8), dtype=np.float32)
+            data_dict['pseudo_boxes'] = np.zeros((0, 13), dtype=np.float32)
 
         return data_dict
 

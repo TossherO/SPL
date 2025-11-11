@@ -57,6 +57,7 @@ with torch.no_grad():
         gt_heatmaps = model.dense_head.forward_ret_dict['target_dicts']['ori_heatmaps'][0][0].cpu().numpy()  # (num_classes, H, W)
         pseudo_heatmap_limit = model.dense_head.forward_ret_dict['target_dicts']['pseudo_heatmap_limit'][0].cpu().numpy()  # (num_classes, H, W)
         pseudo_heatmaps = model.dense_head.forward_ret_dict['target_dicts']['heatmaps'][0][0].cpu().numpy()  # (num_classes, H, W)
+        heatmaps_mask = model.dense_head.forward_ret_dict['target_dicts']['heatmaps_mask'][0][0].cpu().numpy()  # (H, W)
         pred_heatmaps = model.dense_head.forward_ret_dict['pred_dicts'][0]['hm'][0].cpu().numpy()  # (num_classes, H, W)
         
         # Visualization
@@ -88,8 +89,8 @@ with torch.no_grad():
             plt.imshow(pseudo_heatmaps[cls_id], cmap='hot', vmin=0, vmax=1)
             plt.colorbar()
             plt.subplot(1, 4, 4)
-            plt.title(f'Predicted Heatmap - Class {cls_id}')
-            plt.imshow(pred_heatmaps[cls_id], cmap='hot', vmin=0, vmax=1)
+            plt.title(f'Heatmaps Mask - Class {cls_id}')
+            plt.imshow(heatmaps_mask, cmap='hot', vmin=0, vmax=1)
             plt.colorbar()
             plt.savefig(f'output/visualization/sample_{i:03d}_class_{cls_id}.png', bbox_inches='tight')
             plt.close()
