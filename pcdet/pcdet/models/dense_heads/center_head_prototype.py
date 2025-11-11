@@ -506,7 +506,7 @@ class CenterHead_prototype(nn.Module):
                                        gaussian_overlap=0.1, min_radius=2):
         """
         Args:
-            pseudo_boxes: list of (B, M, 9)
+            pseudo_boxes: list of (B, M, 13)
             feature_map_size: (2) [H, W]
         Returns:
             pre_pseudo_masks: (B, NUM_CLASS, H, W)
@@ -515,7 +515,7 @@ class CenterHead_prototype(nn.Module):
         pseudo_heatmap_limit = torch.zeros(
             (batch_size, self.prototype_cfg.NUM_CLASS, feature_map_size[0], feature_map_size[1])
         ).float().cuda()
-        cls_ids = (pseudo_boxes[:, :, -1] - 1).long()
+        cls_ids = (pseudo_boxes[:, :, 7] - 1).long()
 
         x, y, z = pseudo_boxes[:, :, 0], pseudo_boxes[:, :, 1], pseudo_boxes[:, :, 2]
         coord_x = (x - self.point_cloud_range[0]) / self.voxel_size[0] / self.feature_map_stride
@@ -528,11 +528,11 @@ class CenterHead_prototype(nn.Module):
         dx, dy, dz = pseudo_boxes[:, :, 3], pseudo_boxes[:, :, 4], pseudo_boxes[:, :, 5]
         is_bbox3d = dx > 0
         invalid_car = ~is_bbox3d & (cls_ids == self.class_names.index('Car'))
-        dx[invalid_car], dy[invalid_car] = 2.0, 1.0
+        dx[invalid_car], dy[invalid_car] = 2.5, 1.2
         invalid_ped = ~is_bbox3d & (cls_ids == self.class_names.index('Pedestrian'))
-        dx[invalid_ped], dy[invalid_ped] = 0.6, 0.4
+        dx[invalid_ped], dy[invalid_ped] = 0.6, 0.5
         invalid_cyc = ~is_bbox3d & (cls_ids == self.class_names.index('Cyclist'))
-        dx[invalid_cyc], dy[invalid_cyc] = 1.0, 0.4
+        dx[invalid_cyc], dy[invalid_cyc] = 1.2, 0.5
         dx = dx / self.voxel_size[0] / self.feature_map_stride
         dy = dy / self.voxel_size[1] / self.feature_map_stride
 
@@ -640,7 +640,7 @@ class CenterHead_prototype(nn.Module):
                     pseudo_heatmap[:, i, :, :][class_mask] = max_sim[class_mask]
                     # class_mask_high = (max_class_ids == class_id) & pseudo_mask_high
                     # pseudo_heatmap[:, i, :, :][class_mask_high] = max_sim[class_mask_high]
-                    target_dict['heatmaps_mask'][idx][pseudo_mask | pseudo_heatmap_limit[:, class_id, :, :] > 0] = 0
+                    target_dict['heatmaps_mask'][idx][pseudo_mask | (pseudo_heatmap_limit[:, class_id, :, :] > 0)] = 0
                 target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
                 target_dict['heatmaps_mask'][idx][torch.sum(target_dict['heatmaps'][idx], dim=1) > 0] = 1
 
