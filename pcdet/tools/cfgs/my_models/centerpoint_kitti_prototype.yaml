@@ -46,15 +46,13 @@ MODEL:
             }
 
         PROTOTYPE_CONFIG:
-            # PATH: ../ckpts/prototype_features/centerpoint_kitti_prototype_features.pth
             NUM_CLASS: 3
-            NUM_PROTO: 10
+            NUM_PROTO: 5
             BANK_SIZE: 500
             MEMORY_SIZE: 1000
             FEATURE_DIM: 64
-            PROTO_FEATURE_THRESHOLD: 0.7
-            PSEUDO_LABEL_THRESHOLD: 0.5
-            PSEUDO_LABEL_THRESHOLD_HIGH: 0.8
+            PROTO_FEATURE_THRESHOLD: 0.9
+            PSEUDO_LABEL_THRESHOLD: 0.9
             MAX_PROTO_UPDATE_NUM: 50
             MOMENTUM: 0.9
 

@@ -28,9 +28,9 @@ cfg_from_yaml_file(cfg_file, cfg)
 cfg.TAG = Path(cfg_file).stem
 
 logger = common_utils.create_logger('output/log.txt', rank=cfg.LOCAL_RANK)
-pretrained_model = '../output/my_models/centerpoint_kitti_prototype/new3_1/ckpt/checkpoint_epoch_40.pth'
 cfg.DATA_CONFIG.INFO_PATH['train'] = ['kitti_infos_train_pseudo.pkl']
 cfg.DATA_CONFIG.DATA_AUGMENTOR['AUG_CONFIG_LIST'] = cfg.DATA_CONFIG.DATA_AUGMENTOR['AUG_CONFIG_LIST'][1:]
+pretrained_model = '../output/my_models/centerpoint_kitti_prototype/new2_12/ckpt/checkpoint_epoch_40.pth'
 
 test_set, test_loader, sampler = build_dataloader(
     dataset_cfg=cfg.DATA_CONFIG,
@@ -91,8 +91,10 @@ with torch.no_grad():
             plt.imshow(pseudo_heatmaps[cls_id], cmap='hot', vmin=0, vmax=1)
             plt.colorbar()
             plt.subplot(1, 4, 4)
-            plt.title(f'Heatmaps Mask - Class {cls_id}')
-            plt.imshow(heatmaps_mask, cmap='hot', vmin=0, vmax=1)
+            # plt.title(f'Heatmaps Mask - Class {cls_id}')
+            # plt.imshow(heatmaps_mask, cmap='hot', vmin=0, vmax=1)
+            plt.title(f'Predicted Heatmap - Class {cls_id}')
+            plt.imshow(pred_heatmaps[cls_id], cmap='hot', vmin=0, vmax=1)
             plt.colorbar()
             plt.savefig(f'output/visualization/sample_{i:03d}_class_{cls_id}.png', bbox_inches='tight')
             plt.close()

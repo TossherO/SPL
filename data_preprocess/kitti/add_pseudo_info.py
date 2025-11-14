@@ -43,7 +43,7 @@ if __name__ == '__main__':
             annotations['bbox_3d'][:, 2] += annotations['bbox_3d'][:, 5] / 2
             annotations['score'] = np.array([obj['score_3d'] if obj['score_3d'] is not None else obj['score_2d'] for obj in obj_list])
             annotations['dynamic'] = np.array([sum(obj['vel_3d'] ** 2) > 0 if obj['bbox_3d'] is not None else False for obj in obj_list], dtype=bool)
-            annotations['ref_size'] = np.concatenate([obj['max_lwh'] if obj['max_lwh'] is not None else anchor_sizes[obj['name']].reshape(1, 3) for obj in obj_list], axis=0)
+            annotations['ref_size'] = np.concatenate([obj['max_lwh'].reshape(1, 3) if obj['max_lwh'] is not None else anchor_sizes[obj['name']].reshape(1, 3) for obj in obj_list], axis=0)
             train_info[sample_idx]['pseudo_annos'] = annotations
 
         if (sample_idx + 1) % 100 == 0:
