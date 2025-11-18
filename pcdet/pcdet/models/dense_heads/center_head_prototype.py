@@ -129,7 +129,8 @@ class CenterHead_prototype(nn.Module):
         self.max_proto_update_num = self.prototype_cfg.MAX_PROTO_UPDATE_NUM
         self.proto_stage = 0
         # trunc_normal_(self.proto_features, std=0.02)
-        nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
+        # nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
+        nn.init.constant_(self.logit_scale, np.log(1))
         self.refresh_new_features()
 
     def build_losses(self):
@@ -272,8 +273,8 @@ class CenterHead_prototype(nn.Module):
 
         for idx, pred_dict in enumerate(pred_dicts):
             pred_dict['hm'] = self.sigmoid(pred_dict['hm'])
-            # hm_loss = self.hm_loss_func(pred_dict['hm'], target_dicts['heatmaps'][idx], mask=target_dicts['heatmaps_mask'][idx])
-            hm_loss = self.hm_loss_func(pred_dict['hm'], target_dicts['heatmaps'][idx])
+            hm_loss = self.hm_loss_func(pred_dict['hm'], target_dicts['heatmaps'][idx], mask=target_dicts['heatmaps_mask'][idx])
+            # hm_loss = self.hm_loss_func(pred_dict['hm'], target_dicts['heatmaps'][idx])
             hm_loss *= self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']
 
             target_boxes = target_dicts['target_boxes'][idx]
@@ -337,10 +338,15 @@ class CenterHead_prototype(nn.Module):
                 proto_features_inter = torch.cat([
                     self.proto_features[cid] for cid in range(self.prototype_cfg.NUM_CLASS) if cid != class_id
                 ], dim=0)  # (sum(NUM_PROTO_not_c), D)
-                logits_inter = logit_scale * feats @ proto_features_inter.t()  # (N_c, sum(NUM_PROTO_not_c))
+                if self.proto_stage > 1:
+                    for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
+                        if class_id in cur_class_ids:
+                            break
+                    proto_features_inter = torch.cat([proto_features_inter, target_dicts['background_feats'][idx]], dim=0)  # (sum(NUM_PROTO_not_c) + N_bg, D)
+                logits_inter = logit_scale * feats @ proto_features_inter.t()  # (N_c, sum(NUM_PROTO_not_c) (+ N_bg))
                 logits_inter = torch.cat([
                     logits_intra[torch.arange(feats.shape[0]), labels].unsqueeze(1), logits_inter
-                ], dim=1)  # (N_c, 1 + sum(NUM_PROTO_not_c))
+                ], dim=1)  # (N_c, 1 + sum(NUM_PROTO_not_c) (+ N_bg))
                 contrastive_inter_loss = F.cross_entropy(logits_inter, torch.zeros_like(labels).long())
             else:
                 if self.memory_features[class_id].shape[0] == 0:
@@ -467,12 +473,12 @@ class CenterHead_prototype(nn.Module):
                 data_dict['gt_boxes'], feature_map_size=spatial_features_2d.size()[2:],
                 feature_map_stride=data_dict.get('spatial_features_2d_strides', None)
             )
-            # if self.proto_stage > 1:
-            #     pseudo_heatmap_limit = self.get_preprocess_pseudo_targets(
-            #         data_dict['pseudo_boxes'], feature_map_size=spatial_features_2d.size()[2:]
-            #     )  # (B, NUM_CLASS, H, W)
-            # else:
-            pseudo_heatmap_limit = None
+            if self.proto_stage > 1:
+                pseudo_heatmap_limit = self.get_preprocess_pseudo_targets(
+                    data_dict['pseudo_boxes'], feature_map_size=spatial_features_2d.size()[2:]
+                )  # (B, NUM_CLASS, H, W)
+            else:
+                pseudo_heatmap_limit = None
             
             # for test
             # target_dict['ori_heatmaps'] = [h.clone() for h in target_dict['heatmaps']]
@@ -641,13 +647,18 @@ class CenterHead_prototype(nn.Module):
             pseudo_mask = (max_sim > self.pseudo_label_thre)
             pred_hm_mask = [pred_dict['hm'].sigmoid() > 0.2 for pred_dict in pred_dicts]
             target_dict['heatmaps_mask'] = [torch.ones_like(h[:, 0, :, :]) for h in target_dict['heatmaps']]  # list of (B, H, W)
-            
+            target_dict['background_feats'] = [None for _ in range(len(target_dict['heatmaps']))]
+
             for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
                 pseudo_heatmap = torch.zeros_like(target_dict['heatmaps'][idx])  # (B, num_classes, H, W)
                 for i, class_id in enumerate(cur_class_ids):
 
                     # collect similar features for prototype updating
-                    class_mask = (max_class_ids == class_id) & sim_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
+                    # class_mask = (max_class_ids == class_id) & sim_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
+                    if self.class_names[class_id] == 'Car':
+                        class_mask = (max_class_ids == class_id) & sim_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
+                    else:
+                        class_mask = (max_class_ids == class_id) & sim_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
                     if class_mask.sum() > 0:
                         class_feats = feats[class_mask]  # (N_c, D)
                         remain_num = self.max_proto_update_num - self.new_features[class_id].shape[0]
@@ -659,13 +670,22 @@ class CenterHead_prototype(nn.Module):
                             self.new_features_labels[class_id] = torch.cat([self.new_features_labels[class_id], max_proto_ids_rect[class_mask][:, class_id][sample_ids]], dim=0)
                     
                     # collect pseudo-labeled features and refine heatmaps
-                    class_mask = (max_class_ids == class_id) & pseudo_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
-                    # class_mask = (max_class_ids == class_id) & pseudo_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
+                    # class_mask = (max_class_ids == class_id) & pseudo_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
+                    if self.class_names[class_id] == 'Car':
+                        class_mask = (max_class_ids == class_id) & pseudo_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
+                    else:
+                        class_mask = (max_class_ids == class_id) & pseudo_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
                     pseudo_heatmap[:, i, :, :][class_mask] = max_sim[class_mask]
-                    # target_dict['heatmaps_mask'][idx][pseudo_mask | (pseudo_heatmap_limit[:, class_id, :, :] > 0)] = 0
+                    target_dict['heatmaps_mask'][idx][pseudo_heatmap_limit[:, class_id, :, :] > 0] = 0
                 
                 target_dict['heatmaps'][idx] = torch.clamp_max(target_dict['heatmaps'][idx] + pseudo_heatmap, max=1.0)
-                # target_dict['heatmaps_mask'][idx][torch.sum(target_dict['heatmaps'][idx], dim=1) > 0] = 1
+                target_dict['heatmaps_mask'][idx][torch.sum(target_dict['heatmaps'][idx], dim=1) > 0] = 1
+                
+                background_mask = (torch.sum(target_dict['heatmaps'][idx], dim=1) == 0) & (target_dict['heatmaps_mask'][idx] == 1)
+                background_feats = feats[background_mask]
+                background_num = self.prototype_cfg.NUM_CLASS * self.prototype_cfg.NUM_PROTO
+                target_dict['background_feats'][idx] = background_feats[torch.randperm(background_feats.shape[0])[:min(background_num, background_feats.shape[0])]]
+        
         else:
             target_dict['heatmaps_mask'] = [None for _ in target_dict['heatmaps']]
 

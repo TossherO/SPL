@@ -9,7 +9,7 @@ DATA_SPLIT: {
 }
 
 INFO_PATH: {
-    'train': [kitti_infos_train_sparse.pkl],
+    'train': [kitti_infos_train_sparse_pseudo.pkl],
     'test': [kitti_infos_val.pkl],
 }
 
@@ -20,7 +20,7 @@ DATA_AUGMENTOR:
     DISABLE_AUG_LIST: ['placeholder']
     AUG_CONFIG_LIST:
         - NAME: gt_sampling
-          USE_ROAD_PLANE: False
+          USE_ROAD_PLANE: True
           DB_INFO_PATH:
               - kitti_dbinfos_train.pkl
           PREPARE: {
