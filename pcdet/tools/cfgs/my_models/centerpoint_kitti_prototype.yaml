@@ -66,6 +66,7 @@ MODEL:
             LOSS_WEIGHTS: {
                 'cls_weight': 1.0,
                 'loc_weight': 2.0,
+                'pseudo_loc_weight': 2.0,
                 'contrastive_intra_weight': 0.5,
                 'contrastive_inter_weight': 1.0,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

@@ -22,9 +22,9 @@ if __name__ == '__main__':
         train_info = pickle.load(f)
 
     anchor_sizes = {
-        'Car': np.array([3.9, 1.6, 1.56]),
-        'Pedestrian': np.array([0.8, 0.6, 1.73]),
-        'Cyclist': np.array([1.76, 0.6, 1.73])
+        'Car': [3.9, 1.6, 1.56],
+        'Pedestrian': [0.8, 0.6, 1.73],
+        'Cyclist': [1.76, 0.6, 1.73]
     }
 
     for sample_idx in range(len(train_info)):
@@ -43,7 +43,7 @@ if __name__ == '__main__':
             annotations['bbox_3d'][:, 2] += annotations['bbox_3d'][:, 5] / 2
             annotations['score'] = np.array([obj['score_3d'] if obj['score_3d'] is not None else obj['score_2d'] for obj in obj_list])
             annotations['dynamic'] = np.array([sum(obj['vel_3d'] ** 2) > 0 if obj['bbox_3d'] is not None else False for obj in obj_list], dtype=bool)
-            annotations['ref_size'] = np.concatenate([obj['max_lwh'].reshape(1, 3) if obj['max_lwh'] is not None else anchor_sizes[obj['name']].reshape(1, 3) for obj in obj_list], axis=0)
+            annotations['ref_size'] = np.array([obj['max_lwh'] if obj['max_lwh'] is not None else anchor_sizes[obj['name']] for obj in obj_list])
             train_info[sample_idx]['pseudo_annos'] = annotations
 
         if (sample_idx + 1) % 100 == 0:

@@ -48,6 +48,33 @@ class SeparateHead(nn.Module):
         return ret_dict
 
 
+class PseudoRegLossCenterNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred_boxes, heatmap, target_boxes, inds):
+        pred, target = [], []
+        for b_idx in range(pred_boxes.shape[0]):
+            heatmap_mask = torch.sum(heatmap[b_idx], dim=0) > 0.9  # (H, W)
+            heatmap_mask = heatmap_mask.view(-1)[inds[b_idx]]
+            if heatmap_mask.sum() == 0:
+                pred.append(pred_boxes[b_idx].permute(1, 2, 0).contiguous().view(-1, pred_boxes.shape[1])[inds[b_idx]][heatmap_mask])
+                target.append(target_boxes[b_idx][heatmap_mask])
+        if len(pred) > 0:
+            pred = torch.cat(pred, dim=0)   # (N_pseudo, 7 or 9)
+            target = torch.cat(target, dim=0)  # (N_pseudo, 13)
+            loss_xyz = torch.abs(pred[:, 0:3] - target[:, 0:3])  # (N_pseudo, 3)
+            loss_dim1 = pred[:, 3:6] - target[:, 3:6]
+            loss_dim2 = pred[:, 3:6] - target[:, 6:9]
+            loss_dim = torch.min(loss_dim1.abs(), loss_dim2.abs()) * (loss_dim1 * loss_dim2 > 0)  # (N_pseudo, 3)
+            loss_rot = torch.abs(pred[:, 6:8] - target[:, 9:11]) * target[:, 12:13]  # (N_pseudo, 2)
+            loss = torch.cat([loss_xyz, loss_dim, loss_rot], dim=1)  # (N_pseudo, 8)
+            loss = torch.sum(loss * target[:, 11:12], dim=0) / torch.clamp_min(target.shape[0], min=1.0)  # (8,)
+        else:
+            loss = pred_boxes.new_zeros((8,))
+        return loss
+
+
 class CenterHead_prototype(nn.Module):
     def __init__(self, model_cfg, input_channels, num_class, class_names, grid_size, point_cloud_range, voxel_size,
                  predict_boxes_when_training=True):
@@ -136,6 +163,7 @@ class CenterHead_prototype(nn.Module):
     def build_losses(self):
         self.add_module('hm_loss_func', loss_utils.FocalLossCenterNet())
         self.add_module('reg_loss_func', loss_utils.RegLossCenterNet())
+        self.add_module('pseudo_reg_loss_func', PseudoRegLossCenterNet())
 
     def assign_target_of_single_head(
             self, num_classes, gt_boxes, feature_map_size, feature_map_stride, num_max_objs=500,
@@ -286,9 +314,16 @@ class CenterHead_prototype(nn.Module):
             loc_loss = (reg_loss * reg_loss.new_tensor(self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['code_weights'])).sum()
             loc_loss = loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
 
-            loss += hm_loss + loc_loss
+            pseudo_reg_loss = self.pseudo_reg_loss_func(
+                pred_boxes, target_dicts['heatmaps'][idx], target_dicts['pseudo_target_boxes'][idx], target_dicts['pseudo_inds'][idx]
+            )
+            pseudo_loc_loss = (pseudo_reg_loss * reg_loss.new_tensor(self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['code_weights'])).sum()
+            pseudo_loc_loss = pseudo_loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['pseudo_loc_weight']
+
+            loss += hm_loss + loc_loss + pseudo_loc_loss
             tb_dict['hm_loss_head_%d' % idx] = hm_loss.item()
             tb_dict['loc_loss_head_%d' % idx] = loc_loss.item()
+            tb_dict['pseudo_loc_loss_head_%d' % idx] = pseudo_loc_loss.item()
 
             if 'iou' in pred_dict or self.model_cfg.get('IOU_REG_LOSS', False):
 
@@ -474,9 +509,11 @@ class CenterHead_prototype(nn.Module):
                 feature_map_stride=data_dict.get('spatial_features_2d_strides', None)
             )
             if self.proto_stage > 1:
-                pseudo_heatmap_limit = self.get_preprocess_pseudo_targets(
+                pseudo_heatmap_limit, pseudo_target_boxes, pseudo_inds = self.get_preprocess_pseudo_targets(
                     data_dict['pseudo_boxes'], feature_map_size=spatial_features_2d.size()[2:]
                 )  # (B, NUM_CLASS, H, W)
+                target_dict['pseudo_target_boxes'] = pseudo_target_boxes
+                target_dict['pseudo_inds'] = pseudo_inds
             else:
                 pseudo_heatmap_limit = None
             
@@ -517,6 +554,8 @@ class CenterHead_prototype(nn.Module):
             feature_map_size: (2) [H, W]
         Returns:
             pre_pseudo_masks: (B, NUM_CLASS, H, W)
+            pseudo_target_boxes: list of list of (num_valid_boxes, 13)
+            pseudo_inds: list of list of (num_valid_boxes,)
         """
         batch_size = pseudo_boxes.shape[0]
         pseudo_heatmap_limit = torch.zeros(
@@ -530,7 +569,8 @@ class CenterHead_prototype(nn.Module):
         coord_x = torch.clamp(coord_x, min=0, max=feature_map_size[1] - 0.5)
         coord_y = torch.clamp(coord_y, min=0, max=feature_map_size[0] - 0.5)
         center = torch.cat((coord_x[:, :, None], coord_y[:, :, None]), dim=-1)
-        # center_int = center.int()
+        center_int = center.int()
+        center_int_float = center_int.float()
 
         dx, dy, dz = pseudo_boxes[:, :, 3], pseudo_boxes[:, :, 4], pseudo_boxes[:, :, 5]
         is_bbox3d = dx > 0
@@ -546,6 +586,8 @@ class CenterHead_prototype(nn.Module):
         radius = centernet_utils.gaussian_radius(dx, dy, min_overlap=gaussian_overlap)
         radius = torch.clamp_min(radius.int(), min=min_radius)
 
+        pseudo_target_boxes = [[[] for _ in range(batch_size)] for _ in range(len(self.class_names_each_head))]
+        pseudo_inds = [[[] for _ in range(batch_size)] for _ in range(len(self.class_names_each_head))]
         for bs_idx in range(batch_size):
             for obj_idx in range(pseudo_boxes.shape[1]):
                 cur_class_id = cls_ids[bs_idx, obj_idx]
@@ -555,9 +597,32 @@ class CenterHead_prototype(nn.Module):
                     pseudo_heatmap_limit[bs_idx, cur_class_id],
                     center[bs_idx, obj_idx], radius[bs_idx, obj_idx].item()
                 )
-            
-        return pseudo_heatmap_limit
-
+                if is_bbox3d[bs_idx, obj_idx]:
+                    box = torch.zeros((13,)).float().cuda()
+                    box[0:2] = center[bs_idx, obj_idx] - center_int_float[bs_idx, obj_idx].float()
+                    box[2] = z[bs_idx, obj_idx]
+                    box[3:6] = pseudo_boxes[bs_idx, obj_idx, 3:6].log()
+                    box[6:9] = pseudo_boxes[bs_idx, obj_idx, 8:11].log()
+                    # box[3:6], box[6:9] = torch.min(box[3:6], box[6:9]), torch.max(box[3:6], box[6:9])
+                    box[9] = torch.cos(pseudo_boxes[bs_idx, obj_idx, 6])
+                    box[10] = torch.sin(pseudo_boxes[bs_idx, obj_idx, 6])
+                    box[11:13] = pseudo_boxes[bs_idx, obj_idx, 8:10]
+                    for idx, cur_class_ids in enumerate(self.class_id_mapping_each_head):
+                        if pseudo_boxes[bs_idx, obj_idx, 7].int() in cur_class_ids:
+                            break
+                    pseudo_target_boxes[idx][bs_idx].append(box)
+                    pseudo_inds[idx][bs_idx].append(center_int[bs_idx, obj_idx, 1] * feature_map_size[1] + center_int[bs_idx, obj_idx, 0])
+        
+        for idx in range(len(self.class_names_each_head)):
+            for bs_idx in range(batch_size):
+                if len(pseudo_target_boxes[idx][bs_idx]) == 0:
+                    pseudo_target_boxes[idx][bs_idx] = pseudo_boxes.new_zeros((0, 13))
+                    pseudo_inds[idx][bs_idx] = pseudo_boxes.new_zeros((0,)).long()
+                else:
+                    pseudo_target_boxes[idx][bs_idx] = torch.stack(pseudo_target_boxes[idx][bs_idx], dim=0)
+                    pseudo_inds[idx][bs_idx] = torch.tensor(pseudo_inds[idx][bs_idx]).long().cuda()
+        
+        return pseudo_heatmap_limit, pseudo_target_boxes, pseudo_inds
 
     def prototype_learning(self, x, pred_dicts, target_dict, pseudo_heatmap_limit):
         """
