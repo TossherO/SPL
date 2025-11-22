@@ -11,6 +11,7 @@ from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti
 from ..dataset import DatasetTemplate
 from ..augmentor.data_augmentor_pseudo import DataAugmentor_pseudo
+from ...ops.iou3d_nms.iou3d_nms_utils import boxes_iou3d_gpu
 
 
 class KittiDataset_pseudo(DatasetTemplate):
@@ -428,6 +429,16 @@ class KittiDataset_pseudo(DatasetTemplate):
             road_plane = self.get_road_plane(sample_idx)
             if road_plane is not None:
                 input_dict['road_plane'] = road_plane
+
+        if 'self_train_annos' in info:
+            self_train_annos = info['self_train_annos']
+            iou3d = boxes_iou3d_gpu(
+                torch.from_numpy(self_train_annos['boxes']).cuda(),
+                torch.from_numpy(input_dict['gt_boxes'].cuda())
+            ).cpu().numpy()
+            keep_mask = (iou3d.max(axis=1) < 0.1)
+            input_dict['gt_names'] = np.concatenate((input_dict['gt_names'], self_train_annos['names'][keep_mask]), axis=0)
+            input_dict['gt_boxes'] = np.concatenate((input_dict['gt_boxes'], self_train_annos['boxes'][keep_mask]), axis=0)
 
         if 'pseudo_annos' in info:
             pseudo_annos = info['pseudo_annos']

@@ -127,7 +127,6 @@ class CenterHead_prototype(nn.Module):
             )
         self.predict_boxes_when_training = predict_boxes_when_training
         self.forward_ret_dict = {}
-        self.build_losses()
 
         # Prototype related
         self.prototype_cfg = self.model_cfg.get('PROTOTYPE_CONFIG', None)
@@ -160,6 +159,8 @@ class CenterHead_prototype(nn.Module):
         # trunc_normal_(self.proto_features, std=0.02)
         # nn.init.constant_(self.logit_scale, np.log(1 / 0.07))
         nn.init.constant_(self.logit_scale, np.log(1))
+        
+        self.build_losses()
         self.refresh_new_features()
 
     def build_losses(self):
