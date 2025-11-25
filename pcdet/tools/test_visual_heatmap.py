@@ -27,7 +27,7 @@ cfg_file = './cfgs/my_models/centerpoint_kitti_prototype.yaml'
 cfg_from_yaml_file(cfg_file, cfg)
 cfg.TAG = Path(cfg_file).stem
 
-logger = common_utils.create_logger('output/log.txt', rank=cfg.LOCAL_RANK)
+logger = common_utils.create_logger()
 cfg.DATA_CONFIG.INFO_PATH['train'] = ['kitti_infos_train_pseudo.pkl']
 cfg.DATA_CONFIG.DATA_AUGMENTOR['AUG_CONFIG_LIST'] = cfg.DATA_CONFIG.DATA_AUGMENTOR['AUG_CONFIG_LIST'][1:]
 pretrained_model = '../output/my_models/centerpoint_kitti_prototype/new2_12/ckpt/checkpoint_epoch_40.pth'

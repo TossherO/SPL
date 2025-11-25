@@ -21,7 +21,7 @@ cfg_from_yaml_file(cfg_file, cfg)
 cfg.TAG = Path(cfg_file).stem
 pretrained_model = '../output/my_models/centerpoint_kitti_prototype/new2_12/ckpt/checkpoint_epoch_12.pth'
 
-logger = common_utils.create_logger('output/log.txt', rank=cfg.LOCAL_RANK)
+logger = common_utils.create_logger()
 
 # cfg.DATA_CONFIG.VERSION = 'v1.0-mini'
 cfg.DATA_CONFIG.DATA_PROCESSOR[1]['SHUFFLE_ENABLED']['train'] = False

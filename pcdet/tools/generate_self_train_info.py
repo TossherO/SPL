@@ -17,7 +17,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--ori_info_path', type=str, default='../data/kitti/kitti_infos_train_sparse_pseudo.pkl', help='original info pkl file path')
     parser.add_argument('--new_info_path', type=str, default='../data/kitti/kitti_infos_train_sparse_self.pkl', help='new info pkl file path')
-    parser.add_argument('--cfg_file', type=str, default='./cfgs/kitti_models/voxel_rcnn_kitti_prototype.yaml', help='specify the config file')
+    parser.add_argument('--cfg_file', type=str, default='./cfgs/my_models/voxel_rcnn_kitti_prototype.yaml', help='specify the config file')
     parser.add_argument('--ckpt', type=str, default='../output/my_models/voxel_rcnn_kitti_prototype/default/ckpt/checkpoint_epoch_80.pth', help='specify the pretrained model')
     return parser.parse_args()
 

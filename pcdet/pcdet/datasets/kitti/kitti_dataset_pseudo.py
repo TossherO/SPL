@@ -11,7 +11,7 @@ from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti
 from ..dataset import DatasetTemplate
 from ..augmentor.data_augmentor_pseudo import DataAugmentor_pseudo
-from ...ops.iou3d_nms.iou3d_nms_utils import boxes_iou3d_gpu
+from ...ops.iou3d_nms.iou3d_nms_utils import boxes_bev_iou_cpu
 
 
 class KittiDataset_pseudo(DatasetTemplate):
@@ -416,8 +416,11 @@ class KittiDataset_pseudo(DatasetTemplate):
             annos = common_utils.drop_info_with_name(annos, name='DontCare')
             loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
             gt_names = annos['name']
-            gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
-            gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
+            if annos.get('gt_boxes_lidar', None) is not None:
+                gt_boxes_lidar = annos['gt_boxes_lidar']
+            else:
+                gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
+                gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
 
             input_dict.update({
                 'gt_names': gt_names,
@@ -432,11 +435,14 @@ class KittiDataset_pseudo(DatasetTemplate):
 
         if 'self_train_annos' in info:
             self_train_annos = info['self_train_annos']
-            iou3d = boxes_iou3d_gpu(
-                torch.from_numpy(self_train_annos['boxes']).cuda(),
-                torch.from_numpy(input_dict['gt_boxes'].cuda())
-            ).cpu().numpy()
-            keep_mask = (iou3d.max(axis=1) < 0.1)
+            if len(input_dict['gt_names']) > 0:
+                iou3d = boxes_bev_iou_cpu(
+                    torch.from_numpy(self_train_annos['boxes']),
+                    torch.from_numpy(input_dict['gt_boxes'])
+                ).numpy()
+                keep_mask = (iou3d.max(axis=1) < 0.1)
+            else:
+                keep_mask = np.array([True] * self_train_annos['boxes'].shape[0], dtype=bool)
             input_dict['gt_names'] = np.concatenate((input_dict['gt_names'], self_train_annos['names'][keep_mask]), axis=0)
             input_dict['gt_boxes'] = np.concatenate((input_dict['gt_boxes'], self_train_annos['boxes'][keep_mask]), axis=0)
 
@@ -692,25 +698,25 @@ def create_kitti_infos(dataset_cfg, class_names, data_path, save_path, info_path
         pickle.dump(kitti_infos_train, f)
     print('Kitti info train file is saved to %s' % train_filename)
 
-    # dataset.set_split(val_split)
-    # kitti_infos_val = dataset.get_infos(info_path=info_path, num_workers=workers, has_label=True, has_pseudo_label=False, count_inside_pts=True)
-    # with open(val_filename, 'wb') as f:
-    #     pickle.dump(kitti_infos_val, f)
-    # print('Kitti info val file is saved to %s' % val_filename)
+    dataset.set_split(val_split)
+    kitti_infos_val = dataset.get_infos(info_path=info_path, num_workers=workers, has_label=True, has_pseudo_label=False, count_inside_pts=True)
+    with open(val_filename, 'wb') as f:
+        pickle.dump(kitti_infos_val, f)
+    print('Kitti info val file is saved to %s' % val_filename)
 
-    # with open(trainval_filename, 'wb') as f:
-    #     pickle.dump(kitti_infos_train + kitti_infos_val, f)
-    # print('Kitti info trainval file is saved to %s' % trainval_filename)
+    with open(trainval_filename, 'wb') as f:
+        pickle.dump(kitti_infos_train + kitti_infos_val, f)
+    print('Kitti info trainval file is saved to %s' % trainval_filename)
 
-    # dataset.set_split('test')
-    # kitti_infos_test = dataset.get_infos(info_path=info_path, num_workers=workers, has_label=False, has_pseudo_label=False, count_inside_pts=False)
-    # with open(test_filename, 'wb') as f:
-    #     pickle.dump(kitti_infos_test, f)
-    # print('Kitti info test file is saved to %s' % test_filename)
+    dataset.set_split('test')
+    kitti_infos_test = dataset.get_infos(info_path=info_path, num_workers=workers, has_label=False, has_pseudo_label=False, count_inside_pts=False)
+    with open(test_filename, 'wb') as f:
+        pickle.dump(kitti_infos_test, f)
+    print('Kitti info test file is saved to %s' % test_filename)
 
-    # print('---------------Start create groundtruth database for data augmentation---------------')
-    # dataset.set_split(train_split)
-    # dataset.create_groundtruth_database(train_filename, split=train_split)
+    print('---------------Start create groundtruth database for data augmentation---------------')
+    dataset.set_split(train_split)
+    dataset.create_groundtruth_database(train_filename, split=train_split)
 
     print('---------------Data preparation Done---------------')
 

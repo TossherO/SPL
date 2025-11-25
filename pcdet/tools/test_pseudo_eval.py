@@ -14,7 +14,7 @@ cfg_from_yaml_file(cfg_file, cfg)
 cfg.TAG = Path(cfg_file).stem
 cfg.DATA_CONFIG.INFO_PATH['test'] = ['kitti_infos_train_pseudo.pkl']
 
-logger = common_utils.create_logger('output/log.txt', rank=cfg.LOCAL_RANK)
+logger = common_utils.create_logger()
 
 test_set, test_loader, sampler = build_dataloader(
     dataset_cfg=cfg.DATA_CONFIG,
