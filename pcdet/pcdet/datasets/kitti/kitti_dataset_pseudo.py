@@ -155,7 +155,7 @@ class KittiDataset_pseudo(DatasetTemplate):
 
         return pts_valid_flag
 
-    def get_infos(self, info_path=None, num_workers=4, has_label=True, has_pseudo_label=True, count_inside_pts=True, sample_id_list=None):
+    def get_infos(self, num_workers=4, has_label=True, count_inside_pts=True, sample_id_list=None):
         import concurrent.futures as futures
 
         def process_single_scene(sample_idx):
@@ -222,33 +222,16 @@ class KittiDataset_pseudo(DatasetTemplate):
                         num_points_in_gt[k] = flag.sum()
                     annotations['num_points_in_gt'] = num_points_in_gt
 
-            if has_pseudo_label:
-                sample = data_info['kitti_object'][sample_idx]
-                pseudo_labels_path = info_path.parent / 'pseudo_labels' / (f'{sample["scene"]}.pkl')
-                with open(pseudo_labels_path, 'rb') as f:
-                    pseudo_labels = pickle.load(f)
-                obj_list = pseudo_labels[str(sample['sample_idx']).zfill(10)]['pseudo_labels_3d']
-                annotations = {}
-                annotations['name'] = np.array([obj['name'] for obj in obj_list])
-                annotations['center_3d'] = np.concatenate([obj['center_3d'].reshape(1, 3) for obj in obj_list], axis=0)
-                annotations['bbox_3d'] = np.concatenate([obj['bbox_3d'].reshape(1, 7) if obj['bbox_3d'] is not None
-                    else np.array([[obj['center_3d'][0], obj['center_3d'][1], obj['center_3d'][2], 0, 0, 0, 0]]) for obj in obj_list], axis=0)
-                annotations['bbox_3d'][:, 2] += annotations['bbox_3d'][:, 5] / 2
-                annotations['score'] = np.array([obj['score_3d'] if obj['score_3d'] is not None else obj['score_2d'] for obj in obj_list])
-                info['pseudo_annos'] = annotations
-
             return info
 
         sample_id_list = sample_id_list if sample_id_list is not None else self.sample_id_list
-        if has_pseudo_label:
-            with open(info_path, 'rb') as f:
-                data_info = pickle.load(f)
         with futures.ThreadPoolExecutor(num_workers) as executor:
             infos = executor.map(process_single_scene, sample_id_list)
         return list(infos)
 
     def create_groundtruth_database(self, info_path=None, used_classes=None, split='train'):
         import torch
+        from pathlib import Path
 
         database_save_path = Path(self.root_path) / ('gt_database' if split == 'train' else ('gt_database_%s' % split))
         db_info_save_path = Path(self.root_path) / ('kitti_dbinfos_%s.pkl' % split)
@@ -414,11 +397,11 @@ class KittiDataset_pseudo(DatasetTemplate):
         if 'annos' in info:
             annos = info['annos']
             annos = common_utils.drop_info_with_name(annos, name='DontCare')
-            loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
             gt_names = annos['name']
             if annos.get('gt_boxes_lidar', None) is not None:
                 gt_boxes_lidar = annos['gt_boxes_lidar']
             else:
+                loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
                 gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
                 gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
 

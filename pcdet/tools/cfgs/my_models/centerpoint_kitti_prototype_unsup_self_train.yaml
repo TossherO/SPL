@@ -2,7 +2,11 @@ CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset_unsupervised.yaml
-    
+    INFO_PATH: {
+        'train': [kitti_infos_train_unsupervised_self.pkl],
+        'test': [kitti_infos_val.pkl],
+    }
+
 MODEL:
     NAME: CenterPoint
 
@@ -99,7 +103,7 @@ MODEL:
 
 OPTIMIZATION:
     BATCH_SIZE_PER_GPU: 8
-    NUM_EPOCHS: 40
+    NUM_EPOCHS: 20
 
     OPTIMIZER: adam_onecycle
     LR: 0.003
@@ -120,10 +124,10 @@ OPTIMIZATION:
 
 
 HOOK:
-    # DisableAugmentationHook:
-    #     DISABLE_AUG_LIST: ['gt_sampling']
-    #     NUM_LAST_EPOCHS: 10
+    DisableAugmentationHook:
+        DISABLE_AUG_LIST: ['gt_sampling']
+        NUM_LAST_EPOCHS: 0
         
     ChangePrototypeStageHook:
-        STAGE_LIST: [0, 1, 2]
-        START_EPOCH_LIST: [0, 5, 10]
+        STAGE_LIST: [2]
+        START_EPOCH_LIST: [0]

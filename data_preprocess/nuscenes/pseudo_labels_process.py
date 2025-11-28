@@ -360,15 +360,14 @@ def process_stream(scene_results, lidar2imgs):
                 })
 
     class_map = {
-        'car': 'vehicle',
-        'bus': 'vehicle',
-        'truck': 'vehicle',
-        'motorcycle': 'cyclist',
-        'bicycle': 'cyclist',
-        'person': 'pedestrian'
+        'car': 'Vehicle',
+        'bus': 'Vehicle',
+        'truck': 'Vehicle',
+        'motorcycle': 'Cyclist',
+        'bicycle': 'Cyclist',
+        'person': 'Pedestrian'
     }
-    instance_counts = {'vehicle': 0, 'pedestrian': 0, 'cyclist': 0}
-
+    instance_counts = {'Vehicle': 0, 'Pedestrian': 0, 'Cyclist': 0}
     for instance_token in instance_token_list:
         instance = instances[instance_token]
         label = class_map[instance['name']]

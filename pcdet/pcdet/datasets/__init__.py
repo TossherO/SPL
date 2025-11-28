@@ -15,6 +15,7 @@ from .once.once_dataset import ONCEDataset
 from .argo2.argo2_dataset import Argo2Dataset
 from .custom.custom_dataset import CustomDataset
 from .kitti.kitti_dataset_pseudo import KittiDataset_pseudo
+from .nuscenes.nuscenes_dataset_pseudo import NuScenesDataset_pseudo
 
 __all__ = {
     'DatasetTemplate': DatasetTemplate,
@@ -27,6 +28,7 @@ __all__ = {
     'CustomDataset': CustomDataset,
     'Argo2Dataset': Argo2Dataset,
     'KittiDataset_pseudo': KittiDataset_pseudo,
+    'NuScenesDataset_pseudo': NuScenesDataset_pseudo,
 }
 
 
