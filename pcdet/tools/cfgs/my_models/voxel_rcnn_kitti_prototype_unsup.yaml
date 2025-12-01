@@ -2,19 +2,15 @@ CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset_unsupervised.yaml
-    INFO_PATH: {
-        'train': [kitti_infos_train_unsupervised_self.pkl],
-        'test': [kitti_infos_val.pkl],
-    }
-
+     
 MODEL:
-    NAME: CenterPoint
+    NAME: VoxelRCNN
 
     VFE:
         NAME: MeanVFE
 
     BACKBONE_3D:
-        NAME: VoxelResBackBone8x
+        NAME: VoxelBackBone8x
 
     MAP_TO_BEV:
         NAME: HeightCompression
@@ -23,11 +19,11 @@ MODEL:
     BACKBONE_2D:
         NAME: BaseBEVBackbone
 
-        LAYER_NUMS: [5]
-        LAYER_STRIDES: [1]
-        NUM_FILTERS: [128]
-        UPSAMPLE_STRIDES: [2]
-        NUM_UPSAMPLE_FILTERS: [256]
+        LAYER_NUMS: [4, 4]
+        LAYER_STRIDES: [1, 2]
+        NUM_FILTERS: [64, 128]
+        UPSAMPLE_STRIDES: [1, 2]
+        NUM_UPSAMPLE_FILTERS: [128, 128]
 
     DENSE_HEAD:
         NAME: CenterHead_prototype
@@ -62,7 +58,7 @@ MODEL:
             WITH_PSEUDO_LOC: False
 
         TARGET_ASSIGNER_CONFIG:
-            FEATURE_MAP_STRIDE: 4
+            FEATURE_MAP_STRIDE: 8
             NUM_MAX_OBJS: 500
             GAUSSIAN_OVERLAP: 0.1
             MIN_RADIUS: 2
@@ -82,9 +78,80 @@ MODEL:
             MAX_OBJ_PER_SAMPLE: 500
             NMS_CONFIG:
                 NMS_TYPE: nms_gpu
-                NMS_THRESH: 0.1
+                NMS_THRESH: 0.7
                 NMS_PRE_MAXSIZE: 4096
                 NMS_POST_MAXSIZE: 500
+
+    ROI_HEAD:
+        NAME: VoxelRCNNHead_prototype
+        CLASS_AGNOSTIC: True
+
+        SHARED_FC: [256, 256]
+        CLS_FC: [256, 256]
+        REG_FC: [256, 256]
+        DP_RATIO: 0.3
+
+        NMS_CONFIG:
+            TRAIN:
+                NMS_TYPE: nms_gpu
+                MULTI_CLASSES_NMS: False
+                NMS_PRE_MAXSIZE: 9000
+                NMS_POST_MAXSIZE: 512
+                NMS_THRESH: 0.8
+            TEST:
+                NMS_TYPE: nms_gpu
+                MULTI_CLASSES_NMS: False
+                USE_FAST_NMS: True
+                SCORE_THRESH: 0.0
+                NMS_PRE_MAXSIZE: 2048
+                NMS_POST_MAXSIZE: 100
+                NMS_THRESH: 0.7
+
+        ROI_GRID_POOL:
+            FEATURES_SOURCE: ['x_conv3', 'x_conv4']
+            PRE_MLP: True
+            GRID_SIZE: 6
+            POOL_LAYERS:
+                x_conv3:
+                    MLPS: [[32, 32], [32, 32]]
+                    QUERY_RANGES: [[2, 2, 2], [4, 4, 4]]
+                    POOL_RADIUS: [0.4, 0.8]
+                    NSAMPLE: [16, 16]
+                    POOL_METHOD: max_pool
+                x_conv4:
+                    MLPS: [[32, 32], [32, 32]]
+                    QUERY_RANGES: [[2, 2, 2], [4, 4, 4]]
+                    POOL_RADIUS: [0.8, 1.6]
+                    NSAMPLE: [16, 16]
+                    POOL_METHOD: max_pool
+
+        TARGET_CONFIG:
+            BOX_CODER: ResidualCoder
+            ROI_PER_IMAGE: 128
+            FG_RATIO: 0.5
+
+            SAMPLE_ROI_BY_EACH_CLASS: True
+            CLS_SCORE_TYPE: roi_iou
+
+            CLS_FG_THRESH: 0.75
+            CLS_BG_THRESH: 0.25
+            CLS_BG_THRESH_LO: 0.1
+            HARD_BG_RATIO: 0.8
+
+            REG_FG_THRESH: 0.55
+
+        LOSS_CONFIG:
+            CLS_LOSS: BinaryCrossEntropy
+            REG_LOSS: smooth-l1
+            CORNER_LOSS_REGULARIZATION: True
+            GRID_3D_IOU_LOSS: False
+            LOSS_WEIGHTS: {
+                'rcnn_cls_weight': 1.0,
+                'rcnn_reg_weight': 1.0,
+                'rcnn_corner_weight': 1.0,
+                'rcnn_iou3d_weight': 1.0,
+                'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+            }
 
     POST_PROCESSING:
         RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
@@ -103,10 +170,10 @@ MODEL:
 
 OPTIMIZATION:
     BATCH_SIZE_PER_GPU: 8
-    NUM_EPOCHS: 20
+    NUM_EPOCHS: 80
 
     OPTIMIZER: adam_onecycle
-    LR: 0.003
+    LR: 0.01
     WEIGHT_DECAY: 0.01
     MOMENTUM: 0.9
 
@@ -122,12 +189,14 @@ OPTIMIZATION:
 
     GRAD_NORM_CLIP: 10
 
+    INTERVAL: 10
+
 
 HOOK:
-    DisableAugmentationHook:
-        DISABLE_AUG_LIST: ['gt_sampling']
-        NUM_LAST_EPOCHS: 0
+    # DisableAugmentationHook:
+    #     DISABLE_AUG_LIST: ['gt_sampling']
+    #     NUM_LAST_EPOCHS: 10
         
     ChangePrototypeStageHook:
-        STAGE_LIST: [2]
-        START_EPOCH_LIST: [0]
+        STAGE_LIST: [0, 1, 2]
+        START_EPOCH_LIST: [0, 10, 20]

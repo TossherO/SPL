@@ -251,7 +251,7 @@ class KittiDataset_pseudo(DatasetTemplate):
             names = annos['name']
             difficulty = annos['difficulty']
             bbox = annos['bbox']
-            gt_boxes = annos['gt_boxes_lidar']
+            gt_boxes = annos['gt_boxes_lidar'] if 'gt_boxes_lidar' in annos else annos['gt_boxes_unsup']
 
             num_obj = gt_boxes.shape[0]
             point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
@@ -398,8 +398,8 @@ class KittiDataset_pseudo(DatasetTemplate):
             annos = info['annos']
             annos = common_utils.drop_info_with_name(annos, name='DontCare')
             gt_names = annos['name']
-            if annos.get('gt_boxes_lidar', None) is not None:
-                gt_boxes_lidar = annos['gt_boxes_lidar']
+            if annos.get('gt_boxes_unsup', None) is not None:
+                gt_boxes_lidar = annos['gt_boxes_unsup']
             else:
                 loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
                 gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)

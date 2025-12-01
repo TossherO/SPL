@@ -34,14 +34,14 @@ if __name__ == '__main__':
         pseudo_annos = data_info[sample_idx].get('pseudo_annos', None)
         if pseudo_annos is not None:
             bboxes = pseudo_annos['bbox_3d'].copy()
-            mask1 = (pseudo_annos['score'] > 0.4) & pseudo_annos['dynamic']
+            mask1 = (pseudo_annos['score'] > 0.4) & (pseudo_annos['dynamic'] | (pseudo_annos['name'] == 'Car'))
             for i in range(len(pseudo_annos['name'])):
                 if pseudo_annos['name'][i] == 'Car':
                     bbox = bboxes[i]
                     max_lwh = pseudo_annos['ref_size'][i]
-                    if ((bbox[:, 3] > 0.8 * max_lwh[0]) & (bbox[:, 3] < 1.2 * max_lwh[0]) &
-                        (bbox[:, 4] > 0.8 * max_lwh[1]) & (bbox[:, 4] < 1.2 * max_lwh[1]) &
-                        (bbox[:, 5] > 0.8 * max_lwh[2]) & (bbox[:, 5] < 1.2 * max_lwh[2])):
+                    if ((bbox[3] > 0.8 * max_lwh[0]) & (bbox[3] < 1.2 * max_lwh[0]) &
+                        (bbox[4] > 0.8 * max_lwh[1]) & (bbox[4] < 1.2 * max_lwh[1]) &
+                        (bbox[5] > 0.8 * max_lwh[2]) & (bbox[5] < 1.2 * max_lwh[2])):
                         bboxes[i][3:6] = max_lwh
                     else:
                         bboxes[i][3:6] = 0
@@ -54,34 +54,36 @@ if __name__ == '__main__':
             mask = mask1 & mask2
             bboxes = bboxes[mask]
             for i in range(len(bboxes)):
+                if pseudo_annos['name'][mask][i] == 'Car':
+                    continue
                 for j in range(3):
                     if bboxes[i][3 + j] < anchors[mask][i][j]:
                         x1, x2 = bboxes[i][3 + j], anchors[mask][i][j]
                         bboxes[i][3 + j] = (x1 * x1 + x2 * x2) / (x1 + x2)
 
         if pseudo_annos is not None and mask.sum() > 0:
-            anno = {
+            annos = {
                 'name': pseudo_annos['name'][mask],
-                'gt_boxes_lidar': bboxes,
+                'gt_boxes_unsup': bboxes,
                 'score': pseudo_annos['score'][mask],
                 'difficulty': np.zeros(mask.sum(), dtype=np.int32),
                 'bbox': np.zeros((mask.sum(), 4), dtype=np.float32)
             }
             for name in counts:
-                counts[name][0] += np.sum(anno['name'] == name)
+                counts[name][0] += np.sum(annos['name'] == name)
                 counts[name][1] += np.sum(pseudo_annos['name'] == name)
             for key in pseudo_annos:
                 pseudo_annos[key] = pseudo_annos[key][~mask]
-            data_info[sample_idx]['annos'] = anno
+            data_info[sample_idx]['annos'] = annos
             data_info[sample_idx]['pseudo_annos'] = pseudo_annos
         else:
-            anno = {
+            annos = {
                 'name': np.array([]),
-                'gt_boxes_lidar': np.zeros((0, 7), dtype=np.float32),
+                'gt_boxes_unsup': np.zeros((0, 7), dtype=np.float32),
                 'difficulty': np.zeros((0,), dtype=np.int32),
                 'bbox': np.zeros((0, 4), dtype=np.float32)
             }
-            data_info[sample_idx]['annos'] = anno
+            data_info[sample_idx]['annos'] = annos
 
         if (sample_idx + 1) % 100 == 0:
             print(f'Processed {sample_idx + 1} / {len(data_info)} samples')

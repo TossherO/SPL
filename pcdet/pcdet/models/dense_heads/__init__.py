@@ -8,6 +8,7 @@ from .center_head import CenterHead
 from .voxelnext_head import VoxelNeXtHead
 from .transfusion_head import TransFusionHead
 from .center_head_prototype import CenterHead_prototype
+from .center_head_prototype_10class import CenterHead_prototype_10class
 
 __all__ = {
     'AnchorHeadTemplate': AnchorHeadTemplate,
@@ -20,4 +21,5 @@ __all__ = {
     'VoxelNeXtHead': VoxelNeXtHead,
     'TransFusionHead': TransFusionHead,
     'CenterHead_prototype': CenterHead_prototype,
+    'CenterHead_prototype_10class': CenterHead_prototype_10class,
 }

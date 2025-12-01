@@ -19,6 +19,7 @@ def parse_args():
     parser.add_argument('--new_info_path', type=str, default='../data/kitti/kitti_infos_train_sparse_self.pkl', help='new info pkl file path')
     parser.add_argument('--cfg_file', type=str, default='./cfgs/my_models/voxel_rcnn_kitti_prototype.yaml', help='specify the config file')
     parser.add_argument('--ckpt', type=str, default='../output/my_models/voxel_rcnn_kitti_prototype/default/ckpt/checkpoint_epoch_80.pth', help='specify the pretrained model')
+    parser.add_argument('--is_unsupervised', action='store_true', help='whether the model is unsupervised')
     return parser.parse_args()
 
 
@@ -55,7 +56,14 @@ if __name__ == '__main__':
             'boxes': pred_boxes
         }
         data_info[i]['self_train_annos'] = self_train_annos
-
+        if args.is_unsupervised:
+            annos = data_info[i]['annos']
+            keep_indices = [i for i, x in enumerate(annos['name']) if x not in ['Car', 'Pedestrian', 'Cyclist']]
+            for key in annos.keys():
+                if key == 'gt_boxes_lidar':
+                    continue
+                annos[key] = annos[key][keep_indices]
+            data_info[i]['annos'] = annos
         if (i + 1) % 100 == 0:
             logger.info(f'Generate self train info for sample index: {i + 1} / {len(test_set)}')
 
