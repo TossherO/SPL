@@ -92,6 +92,6 @@ if __name__ == '__main__':
         for sample_idx in sample_idx_list:
             ground_removal(lidar_with_sweeps, sample_idx, scene_save_dir)
 
-        print(f"Processing scene: {scene_name}, total frames: {len(lidar_with_sweeps)}")
+        print(f"Processed scene: {scene_name}, total frames: {len(lidar_with_sweeps)}")
 
     print("Ground removal processing completed.")

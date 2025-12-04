@@ -1,8 +1,7 @@
-CLASS_NAMES: ['car','truck', 'construction_vehicle', 'bus', 'trailer',
-              'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone']
+CLASS_NAMES: ['Vehicle', 'Pedestrian', 'Cyclist']
 
 DATA_CONFIG:
-    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset_sparse.yaml
+    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset_unsupervised.yaml
 
 MODEL:
     NAME: CenterPoint
@@ -27,16 +26,11 @@ MODEL:
         NUM_UPSAMPLE_FILTERS: [256, 256]
 
     DENSE_HEAD:
-        NAME: CenterHead_prototype_10class
+        NAME: CenterHead_prototype
         CLASS_AGNOSTIC: False
 
         CLASS_NAMES_EACH_HEAD: [
-            ['car'], 
-            ['truck', 'construction_vehicle'],
-            ['bus', 'trailer'],
-            ['barrier'],
-            ['motorcycle', 'bicycle'],
-            ['pedestrian', 'traffic_cone'],
+            ['Vehicle', 'Pedestrian', 'Cyclist']
         ]
 
         SHARED_CONV_CHANNEL: 64
@@ -53,14 +47,14 @@ MODEL:
             }
 
         PROTOTYPE_CONFIG:
-            NUM_CLASS: 10
+            NUM_CLASS: 3
             NUM_PROTO: 5
             BANK_SIZE: 500
             MEMORY_SIZE: 1000
             FEATURE_DIM: 64
             PROTO_FEATURE_THRESHOLD: 0.9
             PSEUDO_LABEL_THRESHOLD: 0.9
-            MAX_PROTO_UPDATE_NUM: 50
+            MAX_PROTO_UPDATE_NUM: 100
             MOMENTUM: 0.9
             WITH_PSEUDO_LOC: False
 
@@ -73,10 +67,10 @@ MODEL:
         LOSS_CONFIG:
             LOSS_WEIGHTS: {
                 'cls_weight': 1.0,
-                'loc_weight': 0.25,
-                'pseudo_loc_weight': 0.25,
-                'contrastive_intra_weight': 0.25,
-                'contrastive_inter_weight': 0.5,
+                'loc_weight': 2.0,
+                'pseudo_loc_weight': 2.0,
+                'contrastive_intra_weight': 0.5,
+                'contrastive_inter_weight': 1.0,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
             }
 
@@ -119,9 +113,9 @@ OPTIMIZATION:
 
 
 HOOK:
-    DisableAugmentationHook:
-        DISABLE_AUG_LIST: ['gt_sampling']
-        NUM_LAST_EPOCHS: 10
+    # DisableAugmentationHook:
+    #     DISABLE_AUG_LIST: ['gt_sampling']
+    #     NUM_LAST_EPOCHS: 10
         
     ChangePrototypeStageHook:
         STAGE_LIST: [0, 1, 2]

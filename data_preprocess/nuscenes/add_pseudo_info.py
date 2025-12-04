@@ -8,8 +8,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--info_path', type=str, default='./data/nuscenes/nuscenes_data_info.pkl', help='Path to the nuscenes data info file')
     parser.add_argument('--pseudo_path', type=str, default='./data/nuscenes/pseudo_labels', help='Path to the pseudo labels directory')
-    parser.add_argument('--train_info_path', type=str, default='./pcdet/data/nuscenes/nuscenes_infos_10sweeps_train.pkl', help='Path to the train info file to be loaded')
-    parser.add_argument('--save_path', type=str, default='./pcdet/data/nuscenes/nuscenes_infos_10sweeps_train_pseudo.pkl', help='Path to save the updated train info file')
+    parser.add_argument('--train_info_path', type=str, default='./pcdet/data/nuscenes/v1.0-trainval/nuscenes_infos_10sweeps_train.pkl', help='Path to the train info file to be loaded')
+    parser.add_argument('--save_path', type=str, default='./pcdet/data/nuscenes/v1.0-trainval/nuscenes_infos_10sweeps_train_pseudo.pkl', help='Path to save the updated train info file')
     return parser.parse_args()
 
 
@@ -53,6 +53,7 @@ if __name__ == '__main__':
                 annotations['score'] = np.array([obj['score_3d'] if obj['score_3d'] is not None else obj['score_2d'] for obj in obj_list])
                 annotations['dynamic'] = np.array([sum(obj['vel_3d'] ** 2) > 1 if obj['bbox_3d'] is not None else False for obj in obj_list], dtype=bool)
                 annotations['ref_size'] = np.array([obj['max_lwh'] if obj['max_lwh'] is not None else anchor_sizes[obj['name']] for obj in obj_list])
+                annotations['vel_3d'] = np.concatenate([obj_list[j]['vel_3d'].reshape(1, 3) if annotations['dynamic'][j] else np.array([[0.0, 0.0]]) for j in range(len(obj_list))], axis=0)
                 train_info[sample_idx]['pseudo_annos'] = annotations
 
             count += 1

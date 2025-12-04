@@ -7,7 +7,7 @@ import pickle
 
 def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--version', type=str, default='v1.0-trainval-select', help='NuScenes dataset version')
+    parser.add_argument('--version', type=str, default='v1.0-trainval', help='NuScenes dataset version')
     parser.add_argument('--data_root', type=str, default='./data/nuscenes', help='Path to the NuScenes dataset root directory')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--save_path', type=str, default='./data/nuscenes/nuscenes_data_info.pkl', help='Path to save the generated data info')
