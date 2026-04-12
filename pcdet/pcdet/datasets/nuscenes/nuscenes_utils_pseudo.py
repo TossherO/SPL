@@ -523,23 +523,28 @@ def transform_det_annos_to_nusc_annos(det_annos, nusc):
 
         for k, box in enumerate(box_list):
             name = det['name'][k]
-            # if np.sqrt(box.velocity[0] ** 2 + box.velocity[1] ** 2) > 0.2:
-            #     if name in ['car', 'construction_vehicle', 'bus', 'truck', 'trailer']:
-            #         attr = 'vehicle.moving'
-            #     elif name in ['bicycle', 'motorcycle']:
-            #         attr = 'cycle.with_rider'
-            #     else:
-            #         attr = None
-            # else:
-            #     if name in ['pedestrian']:
-            #         attr = 'pedestrian.standing'
-            #     elif name in ['bus']:
-            #         attr = 'vehicle.stopped'
-            #     else:
-            #         attr = None
-            # attr = attr if attr is not None else max(
-            #     cls_attr_dist[name].items(), key=operator.itemgetter(1))[0]
-            attr = None
+            if np.sqrt(box.velocity[0] ** 2 + box.velocity[1] ** 2) > 0.2:
+                if name == 'Vehicle':
+                    attr = 'vehicle.moving'
+                elif name == 'Cyclist':
+                    attr = 'cycle.with_rider'
+                else:
+                    attr = None
+            else:
+                if name == 'Pedestrian':
+                    attr = 'pedestrian.standing'
+                elif name == 'Vehicle':
+                    attr = 'vehicle.stopped'
+                else:
+                    attr = None
+            name_map = {
+                'Vehicle': 'car',
+                'Cyclist': 'bicycle',
+                'Pedestrian': 'pedestrian',
+            }
+            name = name_map[name]
+            attr = attr if attr is not None else max(
+                cls_attr_dist[name].items(), key=operator.itemgetter(1))[0]
             nusc_anno = {
                 'sample_token': det['metadata']['token'],
                 'translation': box.center.tolist(),
@@ -559,7 +564,13 @@ def transform_det_annos_to_nusc_annos(det_annos, nusc):
 
 def format_nuscene_results(metrics, class_names, version='default'):
     result = '----------------Nuscene %s results-----------------\n' % version
+    name_map = {
+        'Vehicle': 'car',
+        'Cyclist': 'bicycle',
+        'Pedestrian': 'pedestrian',
+    }
     for name in class_names:
+        name = name_map[name]
         threshs = ', '.join(list(metrics['label_aps'][name].keys()))
         ap_list = list(metrics['label_aps'][name].values())
 

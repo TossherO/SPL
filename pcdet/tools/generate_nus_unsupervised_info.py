@@ -5,6 +5,7 @@ import pickle
 import yaml
 from easydict import EasyDict
 from pathlib import Path
+import pcdet.utils.common_utils as common_utils
 from pcdet.datasets.nuscenes.nuscenes_dataset_pseudo import NuScenesDataset_pseudo
 
 
@@ -12,7 +13,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--root_path', type=str, default='../data/nuscenes/', help='root path of dataset')
     parser.add_argument('--dataset_cfg', type=str, default='cfgs/dataset_configs/nuscenes_dataset_unsupervised.yaml', help='dataset config file')
-    parser.add_argument('--ori_info_path', type=str, default='../data/nuscenes/v1.0-trainval/nuscenes_infos_10sweeps_train.pkl', help='original info pkl file path')
+    parser.add_argument('--ori_info_path', type=str, default='../data/nuscenes/v1.0-trainval/nuscenes_infos_10sweeps_train_pseudo.pkl', help='original info pkl file path')
     parser.add_argument('--new_info_path', type=str, default='../data/nuscenes/v1.0-trainval/nuscenes_infos_10sweeps_train_unsupervised.pkl', help='new info pkl file path')
     return parser.parse_args()
 
@@ -103,6 +104,7 @@ if __name__ == '__main__':
         dataset_cfg = dataset_cfg,
         class_names = None,
         root_path = Path(args.root_path),
+        logger = common_utils.create_logger(),
         training = True
     )
     dataset.create_groundtruth_database(max_sweeps=dataset_cfg.MAX_SWEEPS)

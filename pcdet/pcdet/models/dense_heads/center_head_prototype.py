@@ -581,7 +581,10 @@ class CenterHead_prototype(nn.Module):
 
         dx, dy, dz = pseudo_boxes[:, :, 3], pseudo_boxes[:, :, 4], pseudo_boxes[:, :, 5]
         is_bbox3d = dx > 0
-        invalid_car = ~is_bbox3d & (cls_ids == self.class_names.index('Car'))
+        if 'Car' in self.class_names:
+            invalid_car = ~is_bbox3d & (cls_ids == self.class_names.index('Car'))
+        else:
+            invalid_car = ~is_bbox3d & (cls_ids == self.class_names.index('Vehicle'))
         dx[invalid_car], dy[invalid_car] = 2.5, 1.2
         invalid_ped = ~is_bbox3d & (cls_ids == self.class_names.index('Pedestrian'))
         dx[invalid_ped], dy[invalid_ped] = 0.6, 0.5
@@ -727,7 +730,7 @@ class CenterHead_prototype(nn.Module):
 
                     # collect similar features for prototype updating
                     # class_mask = (max_class_ids == class_id) & sim_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
-                    if self.class_names[class_id] == 'Car':
+                    if self.class_names[class_id] in ['Car', 'Vehicle']:
                         class_mask = (max_class_ids == class_id) & sim_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
                     else:
                         class_mask = (max_class_ids == class_id) & sim_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)
@@ -743,7 +746,7 @@ class CenterHead_prototype(nn.Module):
                     
                     # collect pseudo-labeled features and refine heatmaps
                     # class_mask = (max_class_ids == class_id) & pseudo_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
-                    if self.class_names[class_id] == 'Car':
+                    if self.class_names[class_id] in ['Car', 'Vehicle']:
                         class_mask = (max_class_ids == class_id) & pseudo_mask & pred_hm_mask[idx][:, i, :, :]  # (B, H, W)
                     else:
                         class_mask = (max_class_ids == class_id) & pseudo_mask & (pseudo_heatmap_limit[:, class_id, :, :] > 0)  # (B, H, W)

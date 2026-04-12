@@ -465,6 +465,7 @@ if __name__ == '__main__':
     args = parse_args()
     with open(args.info_path, 'rb') as f:
         data_info = pickle.load(f)
+    os.makedirs(args.save_dir, exist_ok=True)
 
     for scene in data_info['kitti_raw'].keys():
         raw_data = data_info['kitti_raw'][scene]

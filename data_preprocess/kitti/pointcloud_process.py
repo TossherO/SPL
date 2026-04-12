@@ -222,6 +222,9 @@ def get_object_points(frame_info, save_path):
 
     # 5.1 Get the points for each object by object segmentation mask
     for i in range(len(labels)):
+        if object_contours[i].shape[0] == 0:
+            points_object_2d.append(torch.zeros((0, 4), dtype=torch.float32).cuda())
+            continue
         img_mask = np.zeros(args.img_hw, dtype=np.uint8)
         cv2.drawContours(img_mask, [object_contours[i]], -1, 255, thickness=cv2.FILLED)
         kernel = np.ones((3, 3), dtype=np.uint8)

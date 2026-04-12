@@ -23,9 +23,12 @@ class NuScenesDataset_pseudo(DatasetTemplate):
         super().__init__(
             dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
         )
-        self.data_augmentor = DataAugmentor_pseudo(
-            self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, logger=self.logger
-        ) if self.training else None
+        if self.dataset_cfg is None or class_names is None:
+            self.data_augmentor = None
+        else:
+            self.data_augmentor = DataAugmentor_pseudo(
+                self.root_path, self.dataset_cfg.DATA_AUGMENTOR, self.class_names, logger=self.logger
+            ) if self.training else None
 
         self.infos = []
         self.camera_config = self.dataset_cfg.get('CAMERA_CONFIG', None)
@@ -254,8 +257,8 @@ class NuScenesDataset_pseudo(DatasetTemplate):
             self_train_annos = info['self_train_annos']
             if len(input_dict['gt_names']) > 0:
                 iou3d = boxes_bev_iou_cpu(
-                    torch.from_numpy(self_train_annos['boxes']),
-                    torch.from_numpy(input_dict['gt_boxes'])
+                    torch.from_numpy(self_train_annos['boxes'][:, :7].astype(np.float32)),
+                    torch.from_numpy(input_dict['gt_boxes'][:, :7].astype(np.float32))
                 ).numpy()
                 keep_mask = (iou3d.max(axis=1) < 0.1)
             else:
@@ -514,27 +517,26 @@ class NuScenesDataset_pseudo(DatasetTemplate):
 
         from nuscenes.eval.detection.config import config_factory
         from nuscenes.eval.detection.evaluate import NuScenesEval
-        from nuscenes.eval.detection.data_classes import DetectionConfig
 
         eval_set_map = {
             'v1.0-mini': 'mini_val',
             'v1.0-trainval': 'val',
             'v1.0-test': 'test'
         }
-        # try:
-        #     eval_version = 'detection_cvpr_2019'
-        #     eval_config = config_factory(eval_version)
-        # except:
-        #     eval_version = 'cvpr_2019'
-        #     eval_config = config_factory(eval_version)
-        eval_config_name = 'nus_eval_3class'
-        this_dir = os.path.dirname(os.path.abspath(__file__))
-        eval_cfg_path = os.path.join(this_dir, '%s.json' % eval_config_name)
-        assert os.path.exists(eval_cfg_path), \
-            'Requested unknown configuration {}'.format(eval_config_name)
-        with open(eval_cfg_path, 'r') as f:
-            data = json.load(f)
-        eval_config = DetectionConfig.deserialize(data)
+        try:
+            eval_version = 'detection_cvpr_2019'
+            eval_config = config_factory(eval_version)
+        except:
+            eval_version = 'cvpr_2019'
+            eval_config = config_factory(eval_version)
+
+        for i in range(len(nusc.category)):
+            name = nusc.category[i]['name'].split('.')
+            if name[0] == 'vehicle':
+                if name[1] in ['bus', 'truck', 'construction_vehicle', 'trailer']:
+                    nusc.category[i]['name'] = 'vehicle.car'
+                elif name[1] == 'motorcycle':
+                    nusc.category[i]['name'] = 'vehicle.bicycle'
 
         nusc_eval = NuScenesEval(
             nusc,
